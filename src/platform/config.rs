@@ -26,6 +26,10 @@ pub struct Config {
     /// checkbox / tray) is persisted separately in `runtime.toml`, which overrides
     /// this — so Waynote never rewrites the user's config.
     pub confirm_delete: bool,
+    /// Global UI text scale multiplier (1.0 = system default ~10pt). Applied as a
+    /// `window { font-size: ... }` CSS rule at startup. Hand-edit only — there is
+    /// no in-app control for this yet.
+    pub font_scale: f64,
     #[serde(flatten)]
     pub extra: BTreeMap<String, toml::Value>,
 }
@@ -47,6 +51,7 @@ impl Default for Config {
             fallback_monitor: "cursor".to_string(),
             log_level: "info".to_string(),
             confirm_delete: true,
+            font_scale: 1.0,
             extra: BTreeMap::new(),
         }
     }
@@ -103,6 +108,7 @@ mod tests {
         assert_eq!(config.geometry_save_debounce_ms, 500);
         assert_eq!(config.fallback_monitor, "cursor");
         assert_eq!(config.log_level, "info");
+        assert_eq!(config.font_scale, 1.0);
         assert_eq!(config.notes_dir, None);
         assert!(config.extra.is_empty());
     }
@@ -129,6 +135,27 @@ mod tests {
         assert_eq!(config.default_layer, "front"); // default
         assert!(!config.autostart); // default
         assert!(config.tray_enabled); // default
+        assert_eq!(config.font_scale, 1.0); // default
+    }
+
+    #[test]
+    fn font_scale_overrides_from_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().to_str().unwrap().to_string();
+        let waynote_dir = std::path::Path::new(&base).join("waynote");
+        std::fs::create_dir_all(&waynote_dir).unwrap();
+
+        let config_file = waynote_dir.join("config.toml");
+        std::fs::write(&config_file, "font_scale = 1.5").unwrap();
+
+        let paths = Paths::from_env(|k| match k {
+            "XDG_CONFIG_HOME" => Some(base.clone()),
+            _ => None,
+        });
+
+        let config = load(&paths);
+
+        assert_eq!(config.font_scale, 1.5);
     }
 
     #[test]

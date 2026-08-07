@@ -73,6 +73,11 @@ pub struct Controller {
     pub watch_guard: Option<WatchGuard>,
     /// Keeps the tray alive; dropping it stops the SNI service.
     pub tray_handle: Option<super::tray::TrayHandle>,
+    /// Live handle to the global font-size CSS rule (installed once in `new`,
+    /// re-loaded in place by `adjust_font_scale` — a `CssProvider` already added
+    /// to the display picks up a fresh `load_from_data` immediately, no need to
+    /// remove/re-add it).
+    pub font_css_provider: gtk::CssProvider,
 }
 
 impl Controller {
@@ -84,6 +89,8 @@ impl Controller {
         let confirm_delete = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
             crate::platform::runtime_prefs::load_confirm_delete(&paths, config.confirm_delete),
         ));
+        let font_scale = crate::platform::runtime_prefs::load_font_scale(&paths, config.font_scale);
+        let font_css_provider = install_font_scale_css(font_scale);
         let surf_count = manager.surfaces().len();
         Rc::new(RefCell::new(Self {
             manager,
@@ -104,6 +111,7 @@ impl Controller {
             drag_input_surface: None,
             watch_guard: None,
             tray_handle: None,
+            font_css_provider,
         }))
     }
 
@@ -1725,6 +1733,25 @@ impl Controller {
         }
     }
 
+    /// Tray "Font size +/-": bump the global scale by `delta` (±0.1 from the
+    /// tray), clamped to a sane range, persist it to `runtime.toml` (NOT
+    /// config.toml — same reasoning as `confirm_delete`), and re-load the live
+    /// `CssProvider` in place. Takes effect on every note immediately, no
+    /// restart — unlike the confirm-delete flag, there's no separate widget
+    /// state to refresh, the CSS engine re-styles on its own once the
+    /// provider's data changes.
+    pub fn adjust_font_scale(this: &Rc<RefCell<Self>>, delta: f64) {
+        let c = this.borrow();
+        let current =
+            crate::platform::runtime_prefs::load_font_scale(&c.paths, c.config.font_scale);
+        let next = (current + delta).clamp(0.5, 3.0);
+        if let Err(e) = crate::platform::runtime_prefs::save_font_scale(&c.paths, next) {
+            eprintln!("[waynote] save font_scale failed: {e}");
+        }
+        #[allow(deprecated)]
+        c.font_css_provider.load_from_data(&font_scale_css(next));
+    }
+
     /// Spec §4.6: an app trash dir, never silent permanent loss. We move into
     /// `<data>/waynote/trash/` ourselves (reliable across all wlr compositors —
     /// the `trash` crate's D-Bus portal backend silently no-ops on some Wayland
@@ -2275,11 +2302,49 @@ impl Controller {
             Self::set_confirm_delete(this, value);
             return;
         }
+        if cmd == TrayCommand::FontScaleUp {
+            Self::adjust_font_scale(this, 0.1);
+            return;
+        }
+        if cmd == TrayCommand::FontScaleDown {
+            Self::adjust_font_scale(this, -0.1);
+            return;
+        }
         match crate::app::tray::action_name(cmd) {
             Some(name) => app.activate_action(name, None),
             None => app.quit(),
         }
     }
+}
+
+/// Base font size (px) the `font_scale` multiplier is relative to — Noto Sans
+/// 10pt @ 96dpi, this system's `gtk-font-name` default.
+const BASE_FONT_PX: f64 = 13.3;
+
+/// The global font-size CSS rule text for a given scale. Scoped to `window`
+/// (not `*`) so it sets one absolute base size that normal GTK inheritance
+/// flows down from — a `*` selector with a percentage would compound
+/// multiplicatively at every nested widget instead.
+fn font_scale_css(scale: f64) -> String {
+    let px = (BASE_FONT_PX * scale).round().max(1.0);
+    format!("window {{ font-size: {px}px; }}")
+}
+
+/// Build and install the global font-size `CssProvider` at the given scale,
+/// returning it so `Controller::adjust_font_scale` can `load_from_data` it
+/// again in place later — a provider already added to the display picks up
+/// fresh data immediately, no need to remove/re-add it (which would otherwise
+/// stack a second provider on every adjustment).
+fn install_font_scale_css(scale: f64) -> gtk::CssProvider {
+    let css = gtk::CssProvider::new();
+    #[allow(deprecated)]
+    css.load_from_data(&font_scale_css(scale));
+    gtk::style_context_add_provider_for_display(
+        &gtk::gdk::Display::default().expect("display"),
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+    css
 }
 
 /// A sortable wall-clock timestamp (epoch millis) for conflict-copy filenames.

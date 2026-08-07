@@ -31,6 +31,10 @@ pub enum TrayCommand {
     /// Set whether deleting a note asks for confirmation first (carries the new
     /// value explicitly — not a toggle — to avoid stale/double-toggle).
     SetAskBeforeDelete(bool),
+    /// Bump the global font scale by +0.1 / -0.1 (`Controller::adjust_font_scale`
+    /// clamps to a sane range and persists to `runtime.toml`).
+    FontScaleUp,
+    FontScaleDown,
     Quit,
 }
 
@@ -46,6 +50,8 @@ pub fn action_name(cmd: TrayCommand) -> Option<&'static str> {
         TrayCommand::Arrange => Some("arrange"),
         TrayCommand::MoveAllToMonitor(_)
         | TrayCommand::SetAskBeforeDelete(_)
+        | TrayCommand::FontScaleUp
+        | TrayCommand::FontScaleDown
         | TrayCommand::Quit => None,
     }
 }
@@ -164,6 +170,9 @@ impl ksni::Tray for WaynoteTray {
             .into(),
         );
 
+        items.push(item("Font size +", "zoom-in-symbolic", TrayCommand::FontScaleUp));
+        items.push(item("Font size -", "zoom-out-symbolic", TrayCommand::FontScaleDown));
+
         items.push(sep());
         items.push(item("Quit", "application-exit-symbolic", TrayCommand::Quit));
         items
@@ -276,6 +285,16 @@ mod tests {
     #[test]
     fn quit_maps_to_none() {
         assert_eq!(action_name(TrayCommand::Quit), None);
+    }
+
+    #[test]
+    fn font_scale_up_maps_to_none() {
+        assert_eq!(action_name(TrayCommand::FontScaleUp), None);
+    }
+
+    #[test]
+    fn font_scale_down_maps_to_none() {
+        assert_eq!(action_name(TrayCommand::FontScaleDown), None);
     }
 
     #[test]
