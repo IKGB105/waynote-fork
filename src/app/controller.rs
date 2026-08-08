@@ -2056,8 +2056,10 @@ fn parse_layer_str(s: &str) -> Layer {
 
 /// PURE: build a fresh empty `Note` from config defaults + a caller-supplied id.
 ///
-/// The note starts with an empty body (displayed as "Untitled" by `Note::title`).
-/// All durable fields are set to their config defaults; no I/O, no GTK.
+/// The note starts with a bare `# ` heading marker as its body — there's no
+/// separate title widget, the first `#` line IS the title, so a new note
+/// should already have that line ready to type into. All durable fields are
+/// set to their config defaults; no I/O, no GTK.
 pub fn new_note(id: String, default_color: &str, default_layer: &Layer) -> crate::core::note::Note {
     crate::core::note::Note {
         id,
@@ -2067,7 +2069,11 @@ pub fn new_note(id: String, default_color: &str, default_layer: &Layer) -> crate
         layer: default_layer.clone(),
         tags: Vec::new(),
         extra: std::collections::BTreeMap::new(),
-        body: String::new(),
+        // "# " (not empty): there's no separate title widget any more — the
+        // first line's `#` heading IS the title, edited via the ordinary body
+        // editor. Starting a new note with the marker already there means the
+        // very first thing you type becomes that heading, cursor-ready.
+        body: "# ".to_string(),
     }
 }
 
@@ -2768,14 +2774,17 @@ mod tests {
     // ── Task 12: new-note construction ───────────────────────────────────────
 
     #[test]
-    fn new_note_uses_config_defaults_and_given_id_with_empty_body() {
+    fn new_note_uses_config_defaults_and_given_id_with_heading_marker_body() {
         let n = new_note("01JZ9P6S0R8ZX0G8N3Z4V7Y8QK".into(), "blue", &Layer::Front);
         assert_eq!(n.id, "01JZ9P6S0R8ZX0G8N3Z4V7Y8QK");
         assert_eq!(n.color, "blue");
         assert_eq!(n.layer, Layer::Front);
         assert!(!n.pinned);
         assert!(n.tags.is_empty());
-        assert!(n.body.is_empty(), "a new note starts empty (title becomes Untitled)");
+        assert_eq!(
+            n.body, "# ",
+            "a new note starts with a bare heading marker, ready to type the title"
+        );
     }
 
     #[test]

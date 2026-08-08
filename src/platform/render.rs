@@ -171,13 +171,11 @@ const CARD_CSS: &str = "
     padding: 1px 6px;
     color: #8A7F5E;
 }
-/* Chrome — header drag strip + resize grip. Kept transparent so the paper bg
-   shows through; only a hairline divider and muted ink hint at the affordances.
-   Per-color is inherited (the chrome sits inside the coloured card). */
+/* Chrome — header drag strip + resize grip. Now just a thin, invisible grab
+   area above the controls row (no title/divider left in it any more — see
+   NoteChrome::new), so it takes no visible space instead of a blank 30px bar. */
 .waynote-header {
-    min-height: 30px;
-    padding: 1px 0 2px 0;
-    border-bottom: 1px solid rgba(0,0,0,0.10);
+    min-height: 6px;
 }
 .waynote-header-title {
     font-size: 0.80em;
@@ -1808,8 +1806,6 @@ pub struct NoteChrome {
     /// glyph `Label` rather than a `gtk::Image`: an icon-theme-independent glyph is
     /// always visible, whereas a diagonal-resize symbolic icon is not portable.
     pub grip: Label,
-    /// Title shown in the header (updated on edit-commit).
-    title: Label,
     /// Conflict indicator: a real `Label` ("⚠ conflict copy saved") toggled via
     /// `set_visible`, so the indicator does not depend on GTK CSS `::before`
     /// pseudo-element support (version-fragile). Hidden by default.
@@ -1833,12 +1829,17 @@ impl NoteChrome {
         content.remove_css_class("waynote-card");
         content.remove_css_class(&color);
 
-        let title_label = Label::new(Some(title));
-        title_label.add_css_class("waynote-header-title");
-        title_label.set_halign(gtk::Align::Start);
-        title_label.set_hexpand(true);
-        title_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        title_label.set_xalign(0.0);
+        // No dedicated title Label/Entry: title-rename-as-a-separate-widget hit
+        // real, repeated GTK4/layer-shell bugs (grab_focus blocked by a
+        // can-focus(false) ancestor, a select_region() crash, and finally a
+        // RefCell-reentrancy panic in the pre-existing drag-gesture code that
+        // `title_entry` living inside `drag_handle` started triggering). The
+        // note's title is just its first `# ...` line — visible as a normal
+        // heading in the rendered body, edited through the SAME body editor as
+        // everything else (already reliable; no new focus/gesture surface to
+        // fight). `title` unused param kept only so this constructor's call
+        // sites don't need touching; nothing renders it anymore.
+        let _ = title;
 
         // Conflict pill: a real Label toggled by set_visible (no CSS pseudo-elements).
         let conflict_label = Label::new(Some("⚠ conflict copy saved"));
@@ -1847,11 +1848,10 @@ impl NoteChrome {
         conflict_label.set_can_focus(false);
         conflict_label.set_visible(false);
 
-        // Drag handle: the title + the empty stretch to its right. The
-        // `GestureDrag` is attached HERE (not the whole header), so clicking the
-        // layer button in the controls cluster never starts a drag.
+        // Drag handle: now just an empty draggable strip (no title text in it
+        // any more — see above). Still its own row, separate from the controls
+        // cluster below, so a drag never starts from a button click.
         let drag_handle = gtk::Box::new(Orientation::Horizontal, 0);
-        drag_handle.append(&title_label);
         drag_handle.set_hexpand(true);
         drag_handle.set_can_focus(false);
 
@@ -1916,16 +1916,33 @@ impl NoteChrome {
         controls.append(&delete_button);
         controls.set_can_focus(false);
 
+        // The header is now JUST the drag strip — no title, no buttons. Kept
+        // (rather than dropped) so notes stay draggable by their top edge; the
+        // `GestureDrag` below is still attached to `drag_handle` specifically.
         let header = gtk::Box::new(Orientation::Horizontal, 0);
         header.add_css_class("waynote-header");
         header.append(&drag_handle);
-        header.append(&controls);
-        // The header must not steal the content's pointer/keyboard — it only hosts
-        // a drag gesture (on the handle) + the layer button, so it is not focusable.
         header.set_can_focus(false);
-        // Fill the full card width so the WHOLE top strip is a drag target (not
-        // just the title text). The min-height comes from `.waynote-header` CSS.
         header.set_hexpand(true);
+
+        // Move the button cluster into NoteView's own top row, next to the
+        // "● view" / "✓ save" mode pill, instead of a separate header strip.
+        // `note_view.widget` is a vertical Box whose first child is currently
+        // `indicator` alone; swap that for a horizontal row of
+        // [controls, indicator] so both live on the same line.
+        {
+            use gtk::prelude::BoxExt;
+            let nv = note_view.borrow();
+            let outer = nv.widget.clone();
+            let indicator = nv.indicator.clone();
+            drop(nv);
+            outer.remove(&indicator);
+            let top_row = gtk::Box::new(Orientation::Horizontal, 0);
+            top_row.set_hexpand(true);
+            top_row.append(&controls);
+            top_row.append(&indicator);
+            outer.prepend(&top_row);
+        }
 
         let column = gtk::Box::new(Orientation::Vertical, 0);
         column.add_css_class("waynote-card");
@@ -1958,7 +1975,6 @@ impl NoteChrome {
             monitor_popover,
             delete_button,
             grip,
-            title: title_label,
             conflict_label,
             column,
             note_view,
@@ -1971,10 +1987,12 @@ impl NoteChrome {
         chrome
     }
 
-    /// Update the header title (called after an edit changes the H1).
-    pub fn set_title(&self, title: &str) {
-        self.title.set_text(title);
-    }
+    /// No-op: there is no header title widget any more (the note's `# ...`
+    /// heading, rendered in the body, IS the visible title). Kept so the
+    /// Controller's existing `entry.chrome.set_title(&title)` call sites
+    /// (after every save) don't all need to be removed for a display that no
+    /// longer exists.
+    pub fn set_title(&self, _title: &str) {}
 
     /// Update the layer-toggle button to reflect the note's current `layer`.
     ///
