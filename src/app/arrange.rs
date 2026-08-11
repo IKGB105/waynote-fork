@@ -49,12 +49,60 @@ pub fn arrange_grid(
         .collect()
 }
 
+/// PURE: where a new note of `new_size` should land next in the same
+/// left-to-right, top-to-bottom flow as `arrange_grid`, WITHOUT moving any
+/// existing note. `existing_sizes` is every other note currently on the
+/// surface, in the same order `arrange_grid`'s `ids` would use (sorted by
+/// id) — their real (possibly manually-dragged-away) positions are ignored
+/// on purpose; this only simulates "if everything so far had been laid out
+/// in flow order, where would one more note go" and returns just that last
+/// slot.
+pub fn next_flow_position(
+    existing_sizes: &[(i32, i32)],
+    new_size: (i32, i32),
+    bounds: Rect,
+    margin: (i32, i32),
+    gap: i32,
+) -> Rect {
+    let ids: Vec<NoteId> = (0..=existing_sizes.len()).map(|i| i.to_string()).collect();
+    let sizes: Vec<(i32, i32)> =
+        existing_sizes.iter().copied().chain(std::iter::once(new_size)).collect();
+    arrange_grid(&ids, &sizes, bounds, margin, gap)
+        .pop()
+        .map(|(_, r)| r)
+        .unwrap_or(Rect { x: bounds.x + margin.0, y: bounds.y + margin.1, w: new_size.0, h: new_size.1 })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn ids(names: &[&str]) -> Vec<NoteId> {
         names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn next_flow_position_with_no_existing_notes_starts_at_the_margin() {
+        let bounds = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        let r = next_flow_position(&[], (240, 200), bounds, (24, 48), 16);
+        assert_eq!(r, Rect { x: 24, y: 48, w: 240, h: 200 });
+    }
+
+    #[test]
+    fn next_flow_position_continues_the_row_after_existing_notes() {
+        let bounds = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        let r = next_flow_position(&[(240, 200)], (240, 200), bounds, (24, 48), 16);
+        assert_eq!(r, Rect { x: 24 + 240 + 16, y: 48, w: 240, h: 200 });
+    }
+
+    #[test]
+    fn next_flow_position_wraps_when_the_row_is_full() {
+        // Bounds w=500: one 240-wide existing note leaves no room for another
+        // 240-wide one on the same row (240+240=480 fits, but margin+gap eats it).
+        let bounds = Rect { x: 0, y: 0, w: 500, h: 1080 };
+        let r = next_flow_position(&[(240, 200), (240, 100)], (240, 150), bounds, (0, 0), 0);
+        assert_eq!(r.x, 0, "wraps back to the left edge");
+        assert_eq!(r.y, 200, "starts below the tallest note in the previous row");
     }
 
     #[test]

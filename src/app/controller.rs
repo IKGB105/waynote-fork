@@ -27,7 +27,7 @@ use crate::platform::store::{self, SaveOutcome};
 use crate::platform::surfaces::{SurfaceLayer, SurfaceManager};
 use crate::platform::watcher::{self, WatchGuard, WatchState};
 
-use super::arrange::arrange_grid;
+use super::arrange::{arrange_grid, next_flow_position};
 use super::edit_session::{keyboard_modes, needs_temporary_front, KeyMode};
 use super::monitor_resolve::MonitorInfo;
 use super::note_entry::{NoteEntry, NoteId, SurfaceKey};
@@ -2013,6 +2013,24 @@ fn collect_surface_ids(ctrl: &Controller, surf_idx: usize) -> Vec<NoteId> {
     ids
 }
 
+/// Ids of all non-hidden entries on `monitor_idx`, ACROSS BOTH layers
+/// (Front/Desktop are separate "surfaces" for arrangement bookkeeping, but
+/// they're not separate screen regions — a Front note and a Desktop note on
+/// the same monitor occupy the same physical space, just different stacking
+/// order). Used to find the next open flow slot for a new note: scoping that
+/// search to only the new note's own layer would ignore every note on the
+/// other layer and could place it right on top of one.
+fn collect_monitor_ids(ctrl: &Controller, monitor_idx: usize) -> Vec<NoteId> {
+    let mut ids: Vec<NoteId> = ctrl
+        .entries
+        .iter()
+        .filter(|(id, e)| !e.hidden && presenter::monitor_for(ctrl, id) == monitor_idx)
+        .map(|(id, _)| id.clone())
+        .collect();
+    ids.sort();
+    ids
+}
+
 /// The bounds for drag/resize clamping + arrange on surface `surf_idx`: the
 /// logical rect of THAT surface's monitor (origin 0,0 since surface coordinates
 /// are monitor-local), else 1920×1080. Previously this always used the first
@@ -2117,11 +2135,15 @@ impl Controller {
         use crate::app::monitor_resolve::active_monitor;
         use crate::platform::store;
 
-        let (id, note, path, monitor_idx, entry_count, default_size) = {
+        let (id, note, path, monitor_idx, rect) = {
             let mut c = this.borrow_mut();
             let id = c.idgen.new_id();
             let default_layer = parse_layer_str(&c.config.default_layer);
-            let note = new_note(id.clone(), &c.config.default_color.clone(), &default_layer);
+            // A varied colour per note (derived from its id, not a fixed
+            // config default) reads better once you have more than a
+            // couple - see theme::random_color.
+            let color = crate::core::theme::random_color(&id);
+            let note = new_note(id.clone(), color, &default_layer);
             let cursor = cursor_monitor_index(&c.monitors);
             let monitor_idx = active_monitor(
                 explicit_output,
@@ -2132,9 +2154,36 @@ impl Controller {
             );
             let filename = format!("{id}-untitled.md");
             let path = c.paths.notes_dir().join(filename);
-            let entry_count = c.entries.len();
             let default_size = c.config.default_size;
-            (id, note, path, monitor_idx, entry_count, default_size)
+
+            // Land the new note in the next open flow slot on its monitor
+            // (same left-to-right, top-to-bottom order as Arrange — see
+            // arrange_grid/next_flow_position) instead of the old fixed
+            // diagonal cascade. Existing notes are never moved; a note
+            // dragged out of the grid on purpose stays put. Scanned across
+            // BOTH layers (collect_monitor_ids, not collect_surface_ids) -
+            // Front and Desktop notes share the same physical screen space,
+            // so a new Front note still needs to dodge existing Desktop ones.
+            let layer = surface_layer_of(&note.layer);
+            let n_surfs = c.manager.surfaces().len();
+            let surf_idx = c.manager.index_of(monitor_idx, layer).min(n_surfs.saturating_sub(1));
+            let existing_sizes: Vec<(i32, i32)> = collect_monitor_ids(&c, monitor_idx)
+                .iter()
+                .map(|eid| {
+                    let g = &c.entries[eid].geometry;
+                    (g.w, g.h)
+                })
+                .collect();
+            let bounds = surface_bounds(&c, surf_idx);
+            let rect = next_flow_position(
+                &existing_sizes,
+                (default_size[0], default_size[1]),
+                bounds,
+                (24, 48),
+                16,
+            );
+
+            (id, note, path, monitor_idx, rect)
         };
 
         // Persist via path-aware save (initial write; base_hash="" → file must not exist).
@@ -2156,7 +2205,6 @@ impl Controller {
             c.monitors.get(monitor_idx).map(|m| m.output_id.clone()).unwrap_or_default()
         };
 
-        let rect = initial_rect(None, default_size, entry_count);
         let geometry = Geometry {
             output: monitor_output.clone(),
             output_desc: String::new(),

@@ -50,6 +50,15 @@ pub fn is_note_color(color: &str) -> bool {
     NOTE_COLORS.contains(&color)
 }
 
+/// PURE: pick a palette colour for a new note, varying from note to note
+/// without an RNG dependency - every note id is unique (ULID), so summing
+/// its bytes gives a value that's effectively random across different notes
+/// while staying deterministic (and trivially testable) for a given id.
+pub fn random_color(id: &str) -> &'static str {
+    let sum: u32 = id.bytes().map(u32::from).sum();
+    NOTE_COLORS[(sum as usize) % NOTE_COLORS.len()]
+}
+
 /// Return the colour tokens for `color`. Unknown names fall back to yellow.
 pub fn theme(color: &str) -> Theme {
     match color {
@@ -76,6 +85,27 @@ mod tests {
     #[test]
     fn unknown_color_falls_back_to_yellow() {
         assert_eq!(theme("mauve"), theme("yellow"));
+    }
+
+    #[test]
+    fn random_color_is_always_a_valid_palette_colour() {
+        for id in ["01A", "01KZQXSG7T6XZR9VTVDTXGP2KY", "", "z"] {
+            assert!(is_note_color(random_color(id)), "{id} produced an invalid colour");
+        }
+    }
+
+    #[test]
+    fn random_color_is_deterministic_for_the_same_id() {
+        assert_eq!(random_color("01KZQXSG7T6XZR9VTVDTXGP2KY"), random_color("01KZQXSG7T6XZR9VTVDTXGP2KY"));
+    }
+
+    #[test]
+    fn random_color_varies_across_different_ids() {
+        // Not a proof of "randomness", just a smoke test that it isn't
+        // hardcoded to always return the same colour.
+        let colors: std::collections::HashSet<_> =
+            (0..20u32).map(|i| random_color(&format!("01KZQXSG7T6XZR9VTVDTXGP{i:02}"))).collect();
+        assert!(colors.len() > 1, "20 different ids all produced the same colour");
     }
 
     const ALL_COLORS: [&str; 7] =
