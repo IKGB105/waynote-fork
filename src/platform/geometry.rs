@@ -30,15 +30,6 @@ pub fn resize_to(start: Rect, dx: i32, dy: i32, min_w: i32, min_h: i32, bounds: 
 
 // used in Plan 4 (drag-to-move / auto-arrange)
 #[allow(dead_code)]
-pub fn grid_position(index: usize, per_col: usize, cell: (i32, i32), margin: (i32, i32), gap: i32) -> (i32, i32) {
-    let per_col = per_col.max(1) as i32;
-    let i = index as i32;
-    let (col, row) = (i / per_col, i % per_col);
-    (margin.0 + col * (cell.0 + gap), margin.1 + row * (cell.1 + gap))
-}
-
-// used in Plan 4 (drag-to-move / auto-arrange)
-#[allow(dead_code)]
 pub fn clamp_into(r: Rect, b: Rect) -> Rect {
     let x = r.x.clamp(b.x, (b.x + b.w - r.w).max(b.x));
     let y = r.y.clamp(b.y, (b.y + b.h - r.h).max(b.y));
@@ -48,16 +39,6 @@ pub fn clamp_into(r: Rect, b: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn grid_position_lays_notes_top_to_bottom_then_next_column() {
-        let cell = (240, 200);
-        let m = (24, 48);
-        let gap = 16;
-        assert_eq!(grid_position(0, 3, cell, m, gap), (24, 48));
-        assert_eq!(grid_position(1, 3, cell, m, gap), (24, 48 + 200 + 16));
-        assert_eq!(grid_position(3, 3, cell, m, gap), (24 + 240 + 16, 48)); // wraps to col 1
-    }
 
     #[test]
     fn clamp_into_pushes_an_offscreen_rect_back_inside_bounds() {

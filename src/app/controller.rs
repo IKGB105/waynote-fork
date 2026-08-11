@@ -1953,18 +1953,26 @@ impl Controller {
     }
 
     pub fn arrange(this: &Rc<RefCell<Self>>, surf_idx: usize) {
-        let (ids, bounds, cell, paths) = {
+        let (ids, sizes, bounds, paths) = {
             let c = this.borrow();
             let ids = collect_surface_ids(&c, surf_idx);
+            // Each note keeps its own current size — arrange only repositions,
+            // it never resizes (a note the user sized on purpose shouldn't
+            // snap back to the default size just from tidying up).
+            let sizes: Vec<(i32, i32)> = ids
+                .iter()
+                .map(|id| {
+                    let g = &c.entries[id].geometry;
+                    (g.w, g.h)
+                })
+                .collect();
             let bounds = surface_bounds(&c, surf_idx);
-            let cell = (c.config.default_size[0], c.config.default_size[1]);
             let paths = c.paths.clone();
-            (ids, bounds, cell, paths)
+            (ids, sizes, bounds, paths)
         };
 
-        let placements = arrange_grid(&ids, bounds, cell, (24, 48), 16);
+        let placements = arrange_grid(&ids, &sizes, bounds, (24, 48), 16);
 
-        let resized: Vec<(Rc<RefCell<render::NoteView>>, i32)>;
         {
             let mut c = this.borrow_mut();
             // First pass: update geometry on each entry and collect (id, geom) pairs.
@@ -1974,8 +1982,6 @@ impl Controller {
                     let entry = c.entries.get_mut(id)?;
                     entry.geometry.x = rect.x;
                     entry.geometry.y = rect.y;
-                    entry.geometry.w = rect.w;
-                    entry.geometry.h = rect.h;
                     Some((id.clone(), entry.geometry.clone()))
                 })
                 .collect();
@@ -1986,20 +1992,6 @@ impl Controller {
             if let Err(e) = layout::save(&paths, &c.layout) {
                 eprintln!("[waynote] arrange: layout save failed: {e}");
             }
-            // Collect each arranged note's view + new content width to refresh image
-            // fit after the Controller borrow is released (arrange changes geometry.w
-            // too, so a stale content_width would overflow the card — same bug as
-            // commit_resize).
-            resized = placements
-                .iter()
-                .filter_map(|(id, rect)| {
-                    let nv = c.entries.get(id)?.chrome.note_view.clone();
-                    Some((nv, content_width_for(rect.w)))
-                })
-                .collect();
-        }
-        for (nv, cw) in resized {
-            render::NoteView::set_content_width_and_rerender(&nv, cw);
         }
 
         presenter::sync_surface(&mut this.borrow_mut(), surf_idx);

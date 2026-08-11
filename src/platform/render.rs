@@ -171,11 +171,13 @@ const CARD_CSS: &str = "
     padding: 1px 6px;
     color: #8A7F5E;
 }
-/* Chrome — header drag strip + resize grip. Now just a thin, invisible grab
-   area above the controls row (no title/divider left in it any more — see
-   NoteChrome::new), so it takes no visible space instead of a blank 30px bar. */
+/* Chrome — header drag strip + resize grip. A thin, invisible grab area
+   above the controls row (no title/divider left in it any more — see
+   NoteChrome::new). 6px was too thin to reliably click for dragging;
+   14px is still much slimmer than the old 30px title bar but gives the
+   pointer a real hit target. */
 .waynote-header {
-    min-height: 6px;
+    min-height: 14px;
 }
 .waynote-header-title {
     font-size: 0.80em;
@@ -1941,7 +1943,24 @@ impl NoteChrome {
             top_row.set_hexpand(true);
             top_row.append(&controls);
             top_row.append(&indicator);
-            outer.prepend(&top_row);
+
+            // 7 fixed-size buttons + the indicator want ~230-250px - more
+            // than MIN_W (160px, see wire_drag_gesture). Without this,
+            // top_row's natural width becomes the *note's* effective
+            // minimum width, so on any note narrower than that the real
+            // clickable/committed surface stays at the note's actual
+            // (smaller) width while the row visually overflows to the
+            // right - exactly the "card wider than its input region" dead
+            // zone make_content_scroller's own comment warns about, just
+            // horizontal instead of vertical this time. Same fix: an
+            // External-policy scroller lets the row shrink and clip
+            // instead of forcing the note wider than it's set to be.
+            let top_row_scroller = ScrolledWindow::new();
+            top_row_scroller.set_policy(PolicyType::External, PolicyType::Never);
+            top_row_scroller.set_child(Some(&top_row));
+            top_row_scroller.set_hexpand(true);
+
+            outer.prepend(&top_row_scroller);
         }
 
         let column = gtk::Box::new(Orientation::Vertical, 0);
