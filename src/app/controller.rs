@@ -22,7 +22,7 @@ use crate::platform::config::{self, Config};
 use crate::platform::geometry::Rect;
 use crate::platform::layout::{self, Geometry, Layout};
 use crate::platform::paths::Paths;
-use crate::platform::render::{self, NoteEvent};
+use crate::platform::render::{self, DragResizeHandler, NoteEvent};
 use crate::platform::store::{self, SaveOutcome};
 use crate::platform::surfaces::{SurfaceLayer, SurfaceManager};
 use crate::platform::watcher::{self, WatchGuard, WatchState};
@@ -371,6 +371,7 @@ impl Controller {
             NoteEvent::TaskToggled(idx) => self.on_task_toggled(id, idx),
             NoteEvent::ColorRequested(color) => self.on_color_requested(id, color),
             NoteEvent::PasteImageRequested => {} // handled via paste_image in the idle closure
+            NoteEvent::FitToContentRequested => self.on_fit_to_content_requested(id),
         }
     }
 
@@ -520,6 +521,26 @@ impl Controller {
         let outcome = persist_entry(entry, now_ts());
         entry.chrome.set_color(&old, &color);
         self.after_persist(id, outcome);
+    }
+
+    /// Resize note `id` to exactly fit its current body at its current width —
+    /// grows a note whose content is being scroll-clipped, or shrinks one with a
+    /// lot of empty space below its text. Width is left untouched; only height
+    /// changes. Reuses `commit_resize` for the actual persist/apply, same as a
+    /// manual corner-drag resize.
+    fn on_fit_to_content_requested(&mut self, id: &NoteId) {
+        const MIN_FIT_HEIGHT: i32 = 60;
+        // Calibrated by hand against `line_yrange`'s measured body height:
+        // -44px lands the card's bottom edge right against the last line's
+        // descender instead of leaving the leftover chrome/body slack.
+        const FIT_MARGIN: i32 = -44;
+        let Some(entry) = self.entries.get(id) else { return };
+        let w = entry.geometry.w;
+        let (chrome_natural, body_natural) =
+            entry.chrome.fit_height_components(w, content_width_for(w));
+        let natural_h = chrome_natural + body_natural + FIT_MARGIN;
+        let new_h = natural_h.max(MIN_FIT_HEIGHT);
+        self.commit_resize(id, w, new_h);
     }
 
     /// React to a persist outcome: update watcher state and toggle the per-note

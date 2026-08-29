@@ -1173,6 +1173,9 @@ pub enum NoteEvent {
     ColorRequested(String),
     /// Ctrl+V in the edit page with an image on the clipboard.
     PasteImageRequested,
+    /// The user clicked "fit to content" — resize the note's height to exactly
+    /// fit its current body, at its current width, with no scrolling.
+    FitToContentRequested,
 }
 
 /// The single installed event handler.
@@ -1349,6 +1352,26 @@ impl NoteView {
         rebuild_view_page(&Rc::downgrade(this));
     }
 
+    /// The rendered body TextView's own exact content height, bypassing
+    /// `view_scroller`. A `ScrolledWindow` does NOT propagate its child's
+    /// natural size upward by default (its whole job is to clip/scroll at a
+    /// FIXED viewport size) — measuring `view` directly is the only way to
+    /// learn how tall the actual text content wants to be.
+    ///
+    /// Uses `line_yrange` on the buffer's last line (the pixel y+height of
+    /// the actual laid-out text) rather than `TextView::measure`'s generic
+    /// natural-size request: `measure` pads for things like cursor blink
+    /// space and rounds up, which measurably over-estimated height (fit
+    /// left a visible gap below the last line). `line_yrange` reads the
+    /// real, already-laid-out pixel extent, so it is exact.
+    pub fn body_natural_height(&self, _width: i32) -> i32 {
+        use gtk::prelude::TextViewExt;
+        let buffer = self.view.buffer();
+        let end_iter = buffer.end_iter();
+        let (y, height) = self.view.line_yrange(&end_iter);
+        y + height
+    }
+
     /// Update the note's usable content width (drives image fit) and, if currently
     /// showing the rendered view, re-render so images track the new note size. In
     /// edit mode only the stored width changes — the next commit/ESC re-renders at
@@ -1485,6 +1508,7 @@ fn make_content_scroller(child: &TextView) -> ScrolledWindow {
     sw.set_hscrollbar_policy(PolicyType::External);
     sw.set_vscrollbar_policy(PolicyType::Automatic);
     sw.set_min_content_width(0);
+    sw.set_min_content_height(0);
     sw.set_propagate_natural_height(false);
     sw.set_propagate_natural_width(false);
     sw.set_vexpand(true);
@@ -1911,6 +1935,21 @@ impl NoteChrome {
         // Colour picker button (Button + manual swatch popover).
         let color_button = build_color_button(&note_view.borrow().handler_sink());
 
+        // "Fit to content" button: resizes the note's height to exactly fit its
+        // current body at its current width, so long content is never scroll-
+        // clipped inside a fixed-height card. Self-contained (emits directly),
+        // same pattern as the colour swatches.
+        let fit_button = Button::new();
+        finish_header_button(&fit_button);
+        set_button_icon(&fit_button, "zoom-fit-best-symbolic", "⤢");
+        fit_button.set_tooltip_text(Some("Fit note to content"));
+        {
+            let sink = note_view.borrow().handler_sink();
+            fit_button.connect_clicked(move |_| {
+                emit(&sink, NoteEvent::FitToContentRequested);
+            });
+        }
+
         // Copy-to-clipboard button: copies the note's raw markdown; wired by the
         // Controller (`wire_copy_button`).
         let copy_button = Button::new();
@@ -1949,6 +1988,7 @@ impl NoteChrome {
         let controls = gtk::Box::new(Orientation::Horizontal, 0);
         controls.append(&conflict_label);
         controls.append(&color_button);
+        controls.append(&fit_button);
         controls.append(&copy_button);
         controls.append(&lock_button);
         controls.append(&layer_button);
@@ -2138,6 +2178,32 @@ impl NoteChrome {
         popover.set_parent(&self.monitor_button);
         *self.monitor_popover.borrow_mut() = Some(popover);
         self.monitor_button.set_visible(true);
+    }
+
+    /// The total note height needed to show ALL of its body with no scrolling,
+    /// at a given note `width` (and the body's own usable `content_width`, i.e.
+    /// `width` minus the card's horizontal padding).
+    ///
+    /// Two pieces, summed:
+    /// - `column`'s own natural height at `width`: header + controls + card
+    ///   padding, automatically correct even if that chrome's layout changes.
+    ///   `view_scroller` (inside `column`) contributes ~0 here — a
+    ///   `ScrolledWindow` does NOT propagate its child's natural size upward
+    ///   by default, so this piece alone is chrome-only, NOT chrome+content
+    ///   (measuring `column` in isolation was the original "fit to content
+    ///   collapses the note" bug).
+    /// - the body TextView's own natural height at `content_width`, measured
+    ///   directly (bypassing the scroller) via `NoteView::body_natural_height`.
+    ///
+    /// Returned as separate `(chrome, body)` components — `Controller`
+    /// applies a calibrated margin correction on top of their sum (see
+    /// `Controller::on_fit_to_content_requested`).
+    pub fn fit_height_components(&self, width: i32, content_width: i32) -> (i32, i32) {
+        use gtk::prelude::WidgetExt;
+        let (_min, chrome_natural, _min_baseline, _natural_baseline) =
+            self.column.measure(Orientation::Vertical, width);
+        let body_natural = self.note_view.borrow().body_natural_height(content_width);
+        (chrome_natural, body_natural)
     }
 
     /// Toggle the `.waynote-active` accent on the card — set while the note is the
