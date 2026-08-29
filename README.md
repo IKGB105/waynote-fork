@@ -30,9 +30,9 @@ live on screen.
 > anything specific to this version.
 
 > [!NOTE]
-> **Waynote is v0.1.0 — young, but functional.** The full feature set works; the
-> interactive paths (drag/resize, click-to-edit, checkboxes, image paste, tray)
-> have had limited real-world testing, so expect the occasional rough edge.
+> **Young, but functional.** The full feature set works; the interactive paths
+> (drag/resize, click-to-edit, checkboxes, image paste, tray) have had limited
+> real-world testing, so expect the occasional rough edge.
 
 ## Why Waynote
 
@@ -64,27 +64,9 @@ Waynote needs a compositor that implements `wlr-layer-shell`:
 
 ## Install
 
-> [!IMPORTANT]
-> The AUR packages below build the **upstream** project — they do not include
-> anything from [What's different in this fork](#whats-different-in-this-fork).
-> To get this fork's version, use **From source** and clone this repo, not
-> upstream's.
-
-### Arch Linux (AUR) — upstream only
-
-The quickest path on Arch and derivatives — two packages are available, pick one:
-
-```sh
-yay -S waynote-bin   # prebuilt binary, no compilation
-yay -S waynote       # builds from source
-```
-
-Either one installs the `waynote` binary, a desktop entry, the tray icon, and a
-(disabled) `systemd` user unit, and pulls in the `gtk4` and `gtk4-layer-shell`
-runtime dependencies automatically. Nothing else to do — skip to
-[Running the app](#running-the-app).
-
-### From source
+This fork isn't packaged anywhere — build it from source. (The upstream `waynote`
+/ `waynote-bin` AUR packages are a different project; they don't include
+anything from [What's different in this fork](#whats-different-in-this-fork).)
 
 You'll need a `wlr-layer-shell` compositor (see
 [Compatibility](#compatibility)), [Rust](https://www.rust-lang.org/tools/install)
@@ -98,8 +80,8 @@ Then build, and install the desktop entry, tray icon, and systemd unit into your
 home directory:
 
 ```sh
-git clone https://github.com/IKGB105/waynote-fork.git   # this fork
-cd waynote
+git clone https://github.com/IKGB105/waynote-fork.git
+cd waynote-fork
 cargo build --release
 ./target/release/waynote install-user-assets   # desktop entry, tray icon, systemd unit
 ```
@@ -233,13 +215,12 @@ for my own daily-driver use:
 
 ## Status
 
-Waynote 0.1.0 is feature-complete: notes on the Wayland desktop with faithful
+Feature-complete for daily use: notes on the Wayland desktop with faithful
 markdown rendering, persistence with live file-watching and conflict copies,
 per-note colour / lock / layer / move-to-monitor controls, a system-tray item,
-image paste, and autostart. Verified live on Hyprland and Sway.
-
-Planned next: broader compositor verification, optional tags and filters, and
-distro packaging beyond the AUR.
+image paste, and autostart. This fork is used daily on Hyprland — other
+`wlr-layer-shell` compositors should work (see [Compatibility](#compatibility))
+but haven't been verified here.
 
 ## Documentation
 
