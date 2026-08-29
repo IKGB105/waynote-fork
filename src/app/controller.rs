@@ -1664,7 +1664,8 @@ impl Controller {
     /// Set `note.color` for `id`, persist the `.md`, and recolor the chrome.
     ///
     /// Unknown colors are ignored (keeps the existing color + logs). Valid
-    /// colors are the palette: yellow, green, blue, pink, purple, gray, orange.
+    /// colors are the palette: yellow, green, blue, pink, purple, gray, orange,
+    /// red, teal, brown.
     pub fn set_color(this: &Rc<RefCell<Self>>, id: &NoteId, color: &str) {
         if !crate::core::theme::is_note_color(color) {
             eprintln!("[waynote] set_color: unknown color {color:?} — keeping current");

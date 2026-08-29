@@ -39,11 +39,23 @@ const ORANGE: Theme = Theme {
     bg: "#F6D9B8", ink: "#43321F", muted: "#8A7152",
     accent: "#BD6415", code_bg: "rgba(0,0,0,0.06)", border: "#E8C49A",
 };
+const RED: Theme = Theme {
+    bg: "#F6C9C2", ink: "#402420", muted: "#8A625C",
+    accent: "#B23A2E", code_bg: "rgba(0,0,0,0.06)", border: "#E8ADA3",
+};
+const TEAL: Theme = Theme {
+    bg: "#BFE5DE", ink: "#223836", muted: "#557670",
+    accent: "#1F7A6C", code_bg: "rgba(0,0,0,0.06)", border: "#A3D4CA",
+};
+const BROWN: Theme = Theme {
+    bg: "#E3CBB0", ink: "#3A2A1C", muted: "#7D6650",
+    accent: "#8B5A2B", code_bg: "rgba(0,0,0,0.06)", border: "#D0B08C",
+};
 
 /// The note colour palette, in picker order. Single source of truth for the valid
 /// colour set (used by the picker UI, `set_color`, and `on_color_requested`).
-pub const NOTE_COLORS: [&str; 7] =
-    ["yellow", "green", "blue", "pink", "purple", "gray", "orange"];
+pub const NOTE_COLORS: [&str; 10] =
+    ["yellow", "green", "blue", "pink", "purple", "gray", "orange", "red", "teal", "brown"];
 
 /// Whether `color` is one of the known palette colours.
 pub fn is_note_color(color: &str) -> bool {
@@ -69,6 +81,9 @@ pub fn theme(color: &str) -> Theme {
         "purple" => PURPLE,
         "gray"   => GRAY,
         "orange" => ORANGE,
+        "red"    => RED,
+        "teal"   => TEAL,
+        "brown"  => BROWN,
         _        => YELLOW,
     }
 }
@@ -108,11 +123,11 @@ mod tests {
         assert!(colors.len() > 1, "20 different ids all produced the same colour");
     }
 
-    const ALL_COLORS: [&str; 7] =
-        ["yellow", "green", "blue", "pink", "purple", "gray", "orange"];
+    const ALL_COLORS: [&str; 10] =
+        ["yellow", "green", "blue", "pink", "purple", "gray", "orange", "red", "teal", "brown"];
 
     #[test]
-    fn all_seven_bg_pairwise_distinct() {
+    fn all_ten_bg_pairwise_distinct() {
         let bgs: Vec<_> = ALL_COLORS.iter().map(|c| theme(c).bg).collect();
         for i in 0..bgs.len() {
             for j in (i + 1)..bgs.len() {
@@ -122,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn all_seven_ink_pairwise_distinct() {
+    fn all_ten_ink_pairwise_distinct() {
         let inks: Vec<_> = ALL_COLORS.iter().map(|c| theme(c).ink).collect();
         for i in 0..inks.len() {
             for j in (i + 1)..inks.len() {
@@ -132,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn all_seven_accent_pairwise_distinct() {
+    fn all_ten_accent_pairwise_distinct() {
         let accents: Vec<_> = ALL_COLORS.iter().map(|c| theme(c).accent).collect();
         for i in 0..accents.len() {
             for j in (i + 1)..accents.len() {

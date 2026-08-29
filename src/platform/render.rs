@@ -75,6 +75,18 @@ const CARD_CSS: &str = "
     background: #F6D9B8;
     border: 1px solid #E8C49A;
 }
+.waynote-card.red {
+    background: #F6C9C2;
+    border: 1px solid #E8ADA3;
+}
+.waynote-card.teal {
+    background: #BFE5DE;
+    border: 1px solid #A3D4CA;
+}
+.waynote-card.brown {
+    background: #E3CBB0;
+    border: 1px solid #D0B08C;
+}
 /* Foreground feedback. Hover: a faint border darken so you can tell the pointer is
    over a note. Active (editing / dragging / resizing): a clear accent ring + deeper
    shadow so the foreground note is unmistakable. Only border-COLOUR and box-shadow
@@ -109,6 +121,9 @@ const CARD_CSS: &str = "
 .waynote-swatch.purple { background: #E0D4F0; border: 1px solid #CBBCE6; }
 .waynote-swatch.gray   { background: #DEDCD6; border: 1px solid #C9C7C0; }
 .waynote-swatch.orange { background: #F6D9B8; border: 1px solid #E8C49A; }
+.waynote-swatch.red    { background: #F6C9C2; border: 1px solid #E8ADA3; }
+.waynote-swatch.teal   { background: #BFE5DE; border: 1px solid #A3D4CA; }
+.waynote-swatch.brown  { background: #E3CBB0; border: 1px solid #D0B08C; }
 /* Delete confirmation popover: a little breathing room around the prompt. */
 .waynote-confirm { padding: 4px; }
 /* Markdown task checkboxes (GTK4 tree: checkbutton > check). Replace Adwaita's
@@ -149,6 +164,9 @@ const CARD_CSS: &str = "
 .waynote-card.purple checkbutton { color: #6E6383; }
 .waynote-card.gray   checkbutton { color: #73726C; }
 .waynote-card.orange checkbutton { color: #8A7152; }
+.waynote-card.red    checkbutton { color: #8A625C; }
+.waynote-card.teal   checkbutton { color: #557670; }
+.waynote-card.brown  checkbutton { color: #7D6650; }
 .waynote-card.yellow checkbutton > check:checked { color: #B07A1E; }
 .waynote-card.green  checkbutton > check:checked { color: #3E7A3E; }
 .waynote-card.blue   checkbutton > check:checked { color: #2C6FA8; }
@@ -156,6 +174,9 @@ const CARD_CSS: &str = "
 .waynote-card.purple checkbutton > check:checked { color: #6B4FA0; }
 .waynote-card.gray   checkbutton > check:checked { color: #5E5C55; }
 .waynote-card.orange checkbutton > check:checked { color: #BD6415; }
+.waynote-card.red    checkbutton > check:checked { color: #B23A2E; }
+.waynote-card.teal   checkbutton > check:checked { color: #1F7A6C; }
+.waynote-card.brown  checkbutton > check:checked { color: #8B5A2B; }
 /* Transparent so the paper bg shows AND so widget CSS never sets a text colour.
    All ink/accent/muted colour is applied programmatically via TextTags — Adwaita
    widget CSS would otherwise override TextTag foregrounds (PoC lesson). Do NOT
@@ -279,6 +300,12 @@ button.waynote-layer-btn:disabled label {
 .waynote-card.gray menubutton.waynote-layer-btn > button { color: #73726C; }
 .waynote-card.orange button.waynote-layer-btn,
 .waynote-card.orange menubutton.waynote-layer-btn > button { color: #8A7152; }
+.waynote-card.red button.waynote-layer-btn,
+.waynote-card.red menubutton.waynote-layer-btn > button { color: #8A625C; }
+.waynote-card.teal button.waynote-layer-btn,
+.waynote-card.teal menubutton.waynote-layer-btn > button { color: #557670; }
+.waynote-card.brown button.waynote-layer-btn,
+.waynote-card.brown menubutton.waynote-layer-btn > button { color: #7D6650; }
 .waynote-card.yellow button.waynote-layer-btn:hover,
 .waynote-card.yellow button.waynote-layer-btn:active,
 .waynote-card.yellow menubutton.waynote-layer-btn:hover > button,
@@ -307,6 +334,18 @@ button.waynote-layer-btn:disabled label {
 .waynote-card.orange button.waynote-layer-btn:active,
 .waynote-card.orange menubutton.waynote-layer-btn:hover > button,
 .waynote-card.orange menubutton.waynote-layer-btn:checked > button { color: #43321F; }
+.waynote-card.red button.waynote-layer-btn:hover,
+.waynote-card.red button.waynote-layer-btn:active,
+.waynote-card.red menubutton.waynote-layer-btn:hover > button,
+.waynote-card.red menubutton.waynote-layer-btn:checked > button { color: #402420; }
+.waynote-card.teal button.waynote-layer-btn:hover,
+.waynote-card.teal button.waynote-layer-btn:active,
+.waynote-card.teal menubutton.waynote-layer-btn:hover > button,
+.waynote-card.teal menubutton.waynote-layer-btn:checked > button { color: #223836; }
+.waynote-card.brown button.waynote-layer-btn:hover,
+.waynote-card.brown button.waynote-layer-btn:active,
+.waynote-card.brown menubutton.waynote-layer-btn:hover > button,
+.waynote-card.brown menubutton.waynote-layer-btn:checked > button { color: #3A2A1C; }
 .waynote-grip {
     color: #8A7F5E;
     opacity: 0.55;
