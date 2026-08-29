@@ -27,7 +27,8 @@ live on screen.
 > It is not affiliated with, and does not track, the upstream project's issue
 > tracker or releases — see [What's different in this fork](#whats-different-in-this-fork)
 > below for the full list of changes, and file issues here, not upstream, for
-> anything specific to this version.
+> anything specific to this version. Everything in that list was built with
+> AI pair-programming assistance (Claude Code).
 
 > [!NOTE]
 > **Young, but functional.** The full feature set works; the interactive paths
