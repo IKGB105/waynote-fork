@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/hero.png" alt="Waynote sticky notes on a Wayland desktop — seven paper colours showing markdown headings, nested and numbered lists, task checkboxes with strikethrough, a fenced code block, a blockquote, a link, and a locked note" width="100%">
+  <img src="docs/fork-hero.png" alt="This fork's notes on a Wayland desktop — no title bar, controls in the note's own mode row, ten paper colours, and the fit-to-content button" width="100%">
 </p>
 
 Waynote keeps quick, glanceable notes on the desktop layer of your tiling
@@ -21,11 +21,18 @@ compositor. Notes are plain `.md` files — hackable, version-controllable, and
 friendly to Obsidian and AI agents: edit a note from any editor and it refreshes
 live on screen.
 
+> [!IMPORTANT]
+> **This is [IKGB105](https://github.com/IKGB105)'s personal fork** of
+> [mryll/waynote](https://github.com/mryll/waynote), kept for my own daily use.
+> It is not affiliated with, and does not track, the upstream project's issue
+> tracker or releases — see [What's different in this fork](#whats-different-in-this-fork)
+> below for the full list of changes, and file issues here, not upstream, for
+> anything specific to this version.
+
 > [!NOTE]
 > **Waynote is v0.1.0 — young, but functional.** The full feature set works; the
 > interactive paths (drag/resize, click-to-edit, checkboxes, image paste, tray)
 > have had limited real-world testing, so expect the occasional rough edge.
-> [Issues](https://github.com/mryll/waynote/issues) and feedback are welcome.
 
 ## Why Waynote
 
@@ -40,7 +47,7 @@ users instead:
   frontmatter (id, color, pinned, locked, tags). Render is faithful — six
   distinct heading levels, bold/italic/strikethrough, inline code and code
   blocks, blockquotes, nested and ordered lists, links, task checkboxes (struck
-  through when done), and inline images — across seven paper colours, with
+  through when done), and inline images — across ten paper colours, with
   `Ctrl+B`/`Ctrl+I`/`Ctrl+K` shortcuts while editing.
 - **Agent- and sync-friendly.** External edits (your editor, a script, an AI
   agent, Syncthing) are reconciled live, with conflict copies instead of silent
@@ -57,7 +64,13 @@ Waynote needs a compositor that implements `wlr-layer-shell`:
 
 ## Install
 
-### Arch Linux (AUR)
+> [!IMPORTANT]
+> The AUR packages below build the **upstream** project — they do not include
+> anything from [What's different in this fork](#whats-different-in-this-fork).
+> To get this fork's version, use **From source** and clone this repo, not
+> upstream's.
+
+### Arch Linux (AUR) — upstream only
 
 The quickest path on Arch and derivatives — two packages are available, pick one:
 
@@ -85,7 +98,7 @@ Then build, and install the desktop entry, tray icon, and systemd unit into your
 home directory:
 
 ```sh
-git clone https://github.com/mryll/waynote.git
+git clone https://github.com/IKGB105/waynote.git   # this fork
 cd waynote
 cargo build --release
 ./target/release/waynote install-user-assets   # desktop entry, tray icon, systemd unit
@@ -191,6 +204,32 @@ src/
 The design follows Vertical Slice Architecture — user actions are slices, while
 filesystem, surfaces, tray, and markdown render are shared platform modules —
 keeping domain logic unit-testable without a display.
+
+## What's different in this fork
+
+Everything below was built on top of [mryll/waynote v0.1.3](https://github.com/mryll/waynote),
+for my own daily-driver use:
+
+- **No title bar.** The header strip is now just a thin, empty drag handle — no
+  title text, no buttons in it. The whole action cluster (colour, fit,
+  copy, lock, layer, pin, move-to-monitor, delete) moved into the note's own
+  top row, next to the "● view" / "✓ save" mode pill. A note's title isn't a
+  separate editable field any more — it's just the first `# ...` heading line
+  in the body, edited through the same body editor as everything else.
+- **Fit-to-content button** (⤢): resizes a note's height to exactly match its
+  body at its current width — no more dragging the bottom-right corner and
+  guessing.
+- **Ten paper colours**, up from seven — added red, teal, and brown.
+- **New notes auto-place and auto-colour.** A new note lands in the next open
+  spot in the arrange flow (dodging existing notes on the same monitor,
+  either layer) instead of a fixed diagonal cascade, and gets a colour picked
+  from the full palette instead of always the configured default.
+- **Arrange is row-major and size-preserving.** The `arrange` action now lays
+  notes out left-to-right (wrapping top-to-bottom) instead of top-to-bottom,
+  and only repositions notes — it no longer resets every note back to the
+  default size on every call.
+- **Global font-scale setting**, adjustable live from the tray menu
+  ("Font size +" / "Font size −", 0.5×–3×) and persisted across restarts.
 
 ## Status
 
