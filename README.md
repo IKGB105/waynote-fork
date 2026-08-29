@@ -98,7 +98,7 @@ Then build, and install the desktop entry, tray icon, and systemd unit into your
 home directory:
 
 ```sh
-git clone https://github.com/IKGB105/waynote.git   # this fork
+git clone https://github.com/IKGB105/waynote-fork.git   # this fork
 cd waynote
 cargo build --release
 ./target/release/waynote install-user-assets   # desktop entry, tray icon, systemd unit
