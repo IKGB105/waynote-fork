@@ -166,34 +166,31 @@ impl Controller {
     /// scopes itself to one surface at a time). Runs once at startup
     /// (`load_notes`); notes that already have an order are left untouched.
     fn assign_missing_order(&mut self) {
-        let mut missing_by_surface: HashMap<usize, Vec<(NoteId, i32, i32)>> = HashMap::new();
-        let mut max_by_surface: HashMap<usize, i32> = HashMap::new();
+        // ONE counter across every note app-wide (every monitor, every layer,
+        // minimized or not) — order numbers must never repeat, anywhere, not
+        // just within a surface. Grouped by (surface, x, y, id) only to decide
+        // ASSIGNMENT ORDER (so each surface's own notes still end up roughly
+        // left-to-right relative to each other); the numbers themselves come
+        // from a single shared sequence.
+        let mut missing: Vec<(NoteId, usize, i32, i32)> = Vec::new();
+        let mut max_order = 0;
         for id in self.entries.keys().cloned().collect::<Vec<_>>() {
             let surf_idx = presenter::surface_index_for(self, &id);
             let entry = &self.entries[&id];
             match entry.note.order {
-                Some(o) => {
-                    let max = max_by_surface.entry(surf_idx).or_insert(0);
-                    *max = (*max).max(o);
-                }
-                None => missing_by_surface.entry(surf_idx).or_default().push((
-                    id,
-                    entry.geometry.x,
-                    entry.geometry.y,
-                )),
+                Some(o) => max_order = max_order.max(o),
+                None => missing.push((id, surf_idx, entry.geometry.x, entry.geometry.y)),
             }
         }
-        for (surf_idx, mut missing) in missing_by_surface {
-            missing.sort_by_key(|(id, x, y)| (*x, *y, id.clone()));
-            let mut next = max_by_surface.get(&surf_idx).copied().unwrap_or(0) + 1;
-            for (id, _, _) in missing {
-                if let Some(entry) = self.entries.get_mut(&id) {
-                    entry.note.order = Some(next);
-                    entry.chrome.set_order(Some(next));
-                    persist_entry(entry, now_ts());
-                }
-                next += 1;
+        missing.sort_by_key(|(id, surf_idx, x, y)| (*surf_idx, *x, *y, id.clone()));
+        let mut next = max_order + 1;
+        for (id, ..) in missing {
+            if let Some(entry) = self.entries.get_mut(&id) {
+                entry.note.order = Some(next);
+                entry.chrome.set_order(Some(next));
+                persist_entry(entry, now_ts());
             }
+            next += 1;
         }
     }
 
@@ -2739,19 +2736,16 @@ impl Controller {
             let layer = surface_layer_of(&note.layer);
             let n_surfs = c.manager.surfaces().len();
             let surf_idx = c.manager.index_of(monitor_idx, layer).min(n_surfs.saturating_sub(1));
-            // Land at the end of the manual arrange order too (highest number
-            // on this surface + 1), so a new note gets a real number right
-            // away instead of showing "–" until the next restart's
-            // `assign_missing_order` backfills it.
-            note.order = Some(
-                collect_surface_ids(&c, surf_idx)
-                    .iter()
-                    .filter_map(|nid| c.entries.get(nid).and_then(|e| e.note.order))
-                    .max()
-                    .unwrap_or(0)
-                    + 1,
-            );
-            let existing_sizes: Vec<(i32, i32)> = collect_monitor_ids(&c, monitor_idx)
+            let monitor_ids = collect_monitor_ids(&c, monitor_idx);
+            // Land at the end of the manual arrange order too — the highest
+            // order number across EVERY note in the app (any monitor, any
+            // layer, minimized or not; not just `monitor_ids`, which would
+            // miss both) + 1, so numbers can never repeat. Scanned separately
+            // from `existing_sizes` below on purpose: that one stays scoped to
+            // this monitor (dodging existing notes only makes sense there),
+            // this one deliberately doesn't.
+            note.order = Some(c.entries.values().filter_map(|e| e.note.order).max().unwrap_or(0) + 1);
+            let existing_sizes: Vec<(i32, i32)> = monitor_ids
                 .iter()
                 .map(|eid| {
                     let g = &c.entries[eid].geometry;
