@@ -134,7 +134,17 @@ impl Controller {
             });
 
             let saved = self.layout.get(&id).cloned();
-            let entry = make_entry(&self.paths, saved, &self.config.default_size, i, ln.note, ln.path, ln.disk_hash);
+            let pre_minimize = self.layout.pre_minimize(&id).cloned();
+            let entry = make_entry(
+                &self.paths,
+                saved,
+                pre_minimize,
+                &self.config.default_size,
+                i,
+                ln.note,
+                ln.path,
+                ln.disk_hash,
+            );
             self.entries.insert(id, entry);
         }
 
@@ -314,8 +324,18 @@ impl Controller {
         let surf_idx = {
             let mut c = this.borrow_mut();
             let saved = c.layout.get(&id).cloned();
+            let pre_minimize = c.layout.pre_minimize(&id).cloned();
             let index = c.entries.len();
-            let entry = make_entry(&c.paths, saved, &c.config.default_size, index, note, path.clone(), disk_hash.clone());
+            let entry = make_entry(
+                &c.paths,
+                saved,
+                pre_minimize,
+                &c.config.default_size,
+                index,
+                note,
+                path.clone(),
+                disk_hash.clone(),
+            );
             c.entries.insert(id.clone(), entry);
             presenter::surface_index_for(&c, &id)
         };
@@ -609,7 +629,7 @@ fn install_event_handlers(this: &Rc<RefCell<Controller>>) {
         entry.chrome.wire_drag_gesture(id.clone(), weak.clone());
         entry.chrome.wire_resize_gesture(id.clone(), weak.clone());
         let current_monitor = presenter::monitor_for(&ctrl, &id);
-        wire_header_buttons(&entry.chrome, &weak, &id, &ctrl.monitors, current_monitor);
+        wire_header_buttons(&entry.chrome, &weak, &id, &ctrl.monitors, current_monitor, &ctrl.config);
     }
 }
 
@@ -764,6 +784,7 @@ fn wire_header_buttons(
     id: &NoteId,
     monitors: &[MonitorInfo],
     current_monitor: usize,
+    config: &Config,
 ) {
     wire_layer_button(&chrome.layer_button, weak.clone(), id.clone());
     wire_lock_button(&chrome.lock_button, weak.clone(), id.clone());
@@ -773,6 +794,17 @@ fn wire_header_buttons(
     wire_minimize_chip_click(&chrome.restore_click, weak.clone(), id.clone());
     wire_delete_button(&chrome.delete_button, weak.clone(), id.clone());
     populate_monitor_menu(chrome, weak, id, monitors, current_monitor);
+    apply_header_button_visibility(chrome, config);
+}
+
+/// Apply `Config::show_*` header-control toggles to a note's chrome. Hand-edit
+/// config only (same as `font_scale`) — hides controls the user doesn't use
+/// (lock/pin/mode-indicator today) without removing the underlying feature.
+fn apply_header_button_visibility(chrome: &render::NoteChrome, config: &Config) {
+    use gtk::prelude::WidgetExt;
+    chrome.lock_button.set_visible(config.show_lock_button);
+    chrome.pin_button.set_visible(config.show_pin_button);
+    chrome.note_view.borrow().set_indicator_visible(config.show_mode_indicator);
 }
 
 /// Build (or rebuild) a note's "move to monitor" menu so it lists every monitor
@@ -929,7 +961,7 @@ fn install_event_handler_for(this: &Rc<RefCell<Controller>>, id: &NoteId) {
     entry.chrome.wire_drag_gesture(id.clone(), weak.clone());
     entry.chrome.wire_resize_gesture(id.clone(), weak.clone());
     let current_monitor = presenter::monitor_for(&ctrl, &id);
-    wire_header_buttons(&entry.chrome, &weak, &id, &ctrl.monitors, current_monitor);
+    wire_header_buttons(&entry.chrome, &weak, &id, &ctrl.monitors, current_monitor, &ctrl.config);
 }
 
 /// Backup ESC handler at the surface-window level: commits the active editor even
@@ -1004,6 +1036,7 @@ fn update_or_insert_known(ws: &mut WatchState, id: &NoteId, path: &str, hash: &s
 fn make_entry(
     paths: &Paths,
     saved: Option<Geometry>,
+    pre_minimize: Option<Geometry>,
     default_size: &[i32; 2],
     fallback_index: usize,
     note: crate::core::note::Note,
@@ -1013,6 +1046,15 @@ fn make_entry(
     let geometry = saved.unwrap_or_else(|| default_geometry(default_size, fallback_index));
     let rect = Rect { x: geometry.x, y: geometry.y, w: geometry.w, h: geometry.h };
     let chrome = build_chrome(paths, &note.id, &note, rect);
+    // `pre_minimize.is_some()` means this note was still minimized when the
+    // layout was last saved: `geometry` above is already its dock-chip rect
+    // (that's what `Layout::set_minimized` stores as the primary geometry), so
+    // only the chrome's visual state needs to catch up — no repositioning.
+    if pre_minimize.is_some() {
+        chrome.set_minimized(true);
+        let title = note.title();
+        chrome.set_chip_title(Some(&title));
+    }
     let surface_key = SurfaceKey {
         output_id: geometry.output.clone(),
         layer: surface_layer_of(&note.layer),
@@ -1026,7 +1068,7 @@ fn make_entry(
         edit_base_hash: None,
         surface_key,
         hidden: false,
-        pre_minimize_geometry: None,
+        pre_minimize_geometry: pre_minimize,
         conflict: false,
         pending_layout_save: None,
         temporarily_fronted: false,
@@ -1248,6 +1290,14 @@ impl Controller {
             .collect();
         for (nid, geom) in geoms {
             self.layout.set(&nid, geom);
+        }
+        // `id` itself is excluded from `collect_surface_ids` above (it's now
+        // minimized), so its chip position + full-size restore target are
+        // saved here, via the two-geometry record — this is what lets
+        // minimize state survive a restart instead of just reverting to
+        // full-size on next launch.
+        if let Some(entry) = self.entries.get(id) {
+            self.layout.set_minimized(id, entry.geometry.clone(), saved_geom.clone());
         }
         if let Err(e) = layout::save(&self.paths, &self.layout) {
             eprintln!("[waynote] minimize_note: layout save failed: {e}");

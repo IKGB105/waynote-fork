@@ -217,8 +217,12 @@ for my own daily-driver use:
   in the bottom-left corner of its monitor; the notes that shared its row
   shift left to close the gap. Right-click the chip to restore it to its exact
   saved position (hovering shows the note's title first, so you know what
-  you're opening). This state doesn't persist across a restart — a minimized
-  note comes back full-size on next launch.
+  you're opening). Survives a restart — a minimized note comes back as a chip,
+  not full-size.
+- **Optional header controls.** `show_lock_button`, `show_pin_button`, and
+  `show_mode_indicator` (the "● view" / "✓ save" pill) in `config.toml` — hand-
+  edit only, like `font_scale` — hide controls you don't use without removing
+  the feature; all default to `true`.
 
 ## Status
 

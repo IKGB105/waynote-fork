@@ -1397,6 +1397,15 @@ impl NoteView {
         }
     }
 
+    /// Show or hide the "● view" / "✓ save" mode pill. It's purely a status
+    /// indicator — clicking the body to edit and Escape/click-away to commit
+    /// work the same with it hidden — so this is config-driven
+    /// (`Config::show_mode_indicator`), applied once at header-wiring time.
+    pub fn set_indicator_visible(&self, visible: bool) {
+        use gtk::prelude::WidgetExt;
+        self.indicator.set_visible(visible);
+    }
+
     /// Insert `text` at the edit buffer's cursor (used to drop in the image
     /// snippet after a paste). Takes the buffer handle under a short borrow,
     /// then mutates the buffer — not the NoteView.

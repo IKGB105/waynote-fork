@@ -30,6 +30,17 @@ pub struct Config {
     /// `window { font-size: ... }` CSS rule at startup. Hand-edit only — there is
     /// no in-app control for this yet.
     pub font_scale: f64,
+    /// Show the per-note lock (read-only toggle) button in the header controls.
+    /// Hand-edit only, like `font_scale` — set to `false` if you don't use it.
+    pub show_lock_button: bool,
+    /// Show the per-note pin (anchor) button in the header controls. Hand-edit
+    /// only, like `font_scale`.
+    pub show_pin_button: bool,
+    /// Show the "● view" / "✓ save" mode pill next to the header controls.
+    /// Clicking a note's body and pressing Escape already switches modes
+    /// without it, so this is purely a visible-state indicator — hide it if
+    /// you don't need it. Hand-edit only, like `font_scale`.
+    pub show_mode_indicator: bool,
     #[serde(flatten)]
     pub extra: BTreeMap<String, toml::Value>,
 }
@@ -52,6 +63,9 @@ impl Default for Config {
             log_level: "info".to_string(),
             confirm_delete: true,
             font_scale: 1.0,
+            show_lock_button: true,
+            show_pin_button: true,
+            show_mode_indicator: true,
             extra: BTreeMap::new(),
         }
     }
@@ -110,7 +124,36 @@ mod tests {
         assert_eq!(config.log_level, "info");
         assert_eq!(config.font_scale, 1.0);
         assert_eq!(config.notes_dir, None);
+        assert!(config.show_lock_button);
+        assert!(config.show_pin_button);
+        assert!(config.show_mode_indicator);
         assert!(config.extra.is_empty());
+    }
+
+    #[test]
+    fn header_button_visibility_overrides_from_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().to_str().unwrap().to_string();
+        let waynote_dir = std::path::Path::new(&base).join("waynote");
+        std::fs::create_dir_all(&waynote_dir).unwrap();
+
+        let config_file = waynote_dir.join("config.toml");
+        std::fs::write(
+            &config_file,
+            "show_lock_button = false\nshow_pin_button = false\nshow_mode_indicator = false\n",
+        )
+        .unwrap();
+
+        let paths = Paths::from_env(|k| match k {
+            "XDG_CONFIG_HOME" => Some(base.clone()),
+            _ => None,
+        });
+
+        let config = load(&paths);
+
+        assert!(!config.show_lock_button);
+        assert!(!config.show_pin_button);
+        assert!(!config.show_mode_indicator);
     }
 
     #[test]

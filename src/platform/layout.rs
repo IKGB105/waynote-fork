@@ -23,6 +23,13 @@ pub struct Geometry {
 #[derive(Serialize, Deserialize)]
 struct NoteLayout {
     geometry: Geometry,
+    /// Present only while the note is minimized: its full-size geometry to
+    /// restore to, so minimize state survives a restart. `geometry` itself
+    /// holds the dock-chip rect in that case. Absent for a normal note —
+    /// `#[serde(default)]` so existing layout.toml files without this key
+    /// still parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pre_minimize: Option<Geometry>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -41,8 +48,31 @@ impl Layout {
         self.inner.notes.get(id).map(|nl| &nl.geometry)
     }
 
+    /// Set `id`'s plain current geometry. Also clears any `pre_minimize` record
+    /// (a note this is called for is, by definition, not mid-minimize — every
+    /// caller of plain `set` is a drag/resize/arrange commit or a restore-to-
+    /// full-size), so a note can't get stuck "minimized" in the saved layout
+    /// after being restored.
     pub fn set(&mut self, id: &str, g: Geometry) {
-        self.inner.notes.insert(id.to_string(), NoteLayout { geometry: g });
+        self.inner
+            .notes
+            .insert(id.to_string(), NoteLayout { geometry: g, pre_minimize: None });
+    }
+
+    /// Set `id`'s geometry while minimized: `chip` is its current (dock-chip)
+    /// rect, `pre_minimize` its full-size geometry to restore to. Persisting
+    /// both is what lets minimize state survive a restart — on load, a note
+    /// with a `pre_minimize` record comes back as a chip instead of full-size.
+    pub fn set_minimized(&mut self, id: &str, chip: Geometry, pre_minimize: Geometry) {
+        self.inner.notes.insert(
+            id.to_string(),
+            NoteLayout { geometry: chip, pre_minimize: Some(pre_minimize) },
+        );
+    }
+
+    /// `id`'s saved pre-minimize geometry, if it was minimized when last saved.
+    pub fn pre_minimize(&self, id: &str) -> Option<&Geometry> {
+        self.inner.notes.get(id).and_then(|nl| nl.pre_minimize.as_ref())
     }
 
     pub fn remove(&mut self, id: &str) {
@@ -133,6 +163,38 @@ mod tests {
         let loaded = load(&paths);
         assert_eq!(loaded.get(id1), Some(&g1));
         assert_eq!(loaded.get(id2), Some(&g2));
+    }
+
+    #[test]
+    fn minimized_note_round_trips_chip_geometry_and_pre_minimize() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = make_paths(dir.path().to_str().unwrap());
+
+        let id = "01JZ9P6S0R8ZX0G8N3Z4V7Y8QC";
+        let full = sample_geometry(1);
+        let chip = Geometry { w: 48, h: 48, ..sample_geometry(2) };
+
+        let mut layout = Layout::default();
+        layout.set_minimized(id, chip.clone(), full.clone());
+        save(&paths, &layout).unwrap();
+
+        let loaded = load(&paths);
+        assert_eq!(loaded.get(id), Some(&chip));
+        assert_eq!(loaded.pre_minimize(id), Some(&full));
+    }
+
+    #[test]
+    fn plain_set_clears_any_pre_minimize_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = make_paths(dir.path().to_str().unwrap());
+        let id = "01JZ9P6S0R8ZX0G8N3Z4V7Y8QD";
+
+        let mut layout = Layout::default();
+        layout.set_minimized(id, sample_geometry(1), sample_geometry(2));
+        assert!(layout.pre_minimize(id).is_some());
+
+        layout.set(id, sample_geometry(3));
+        assert_eq!(layout.pre_minimize(id), None);
     }
 
     #[test]
