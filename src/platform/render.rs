@@ -47,6 +47,13 @@ const CARD_CSS: &str = "
     padding: 14px 16px;
     box-shadow: 0 3px 12px rgba(0,0,0,0.35);
 }
+/* Minimized dock chip: a bare coloured square, no padding/shadow — header and
+   content are hidden (see NoteChrome::set_minimized), so this is ALL there is
+   to see. Click anywhere on it (restore_click) to bring the note back. */
+.waynote-card.waynote-minimized {
+    padding: 0;
+    box-shadow: none;
+}
 .waynote-card.yellow {
     background: #F6EBA8;
     border: 1px solid #E3D58C;
@@ -1848,6 +1855,13 @@ pub struct NoteChrome {
     /// Per-note lock (content read-only) toggle button. The Controller wires its
     /// click + updates its glyph/tooltip via `set_locked`.
     pub lock_button: Button,
+    /// Per-note minimize/restore toggle. The Controller wires its click + updates
+    /// its glyph/tooltip via `set_minimized`. Kept FIRST in the `controls` row on
+    /// purpose: when a note is shrunk to its dock-chip size, `top_row_scroller`'s
+    /// horizontal `External` clipping (see its own comment below) means only the
+    /// first control(s) stay visible/clickable in that tiny width — this must be
+    /// the one that survives, or a minimized note couldn't be restored.
+    pub minimize_button: Button,
     /// Per-note "copy to clipboard" button — copies the note's raw markdown.
     pub copy_button: Button,
     /// Per-note "pin" toggle. A pinned note is anchored: exempt from hide-all and
@@ -1877,6 +1891,18 @@ pub struct NoteChrome {
     conflict_label: Label,
     /// The card column carrying the paper-colour CSS class (recolour target).
     column: gtk::Box,
+    /// The wrapped content component's own top-level widget (title-row +
+    /// controls + body). Hidden by `set_minimized(true)` so a minimized note's
+    /// chip shows nothing but its `column` background colour — no button, no
+    /// text, just the coloured square the user asked for.
+    content: gtk::Box,
+    /// Right-click-to-restore gesture on `root`, permanently attached (button 3
+    /// only — a plain left click on the chip does nothing, so it can't be
+    /// opened by accident). Only `restore_if_minimized`'s wiring (Controller
+    /// side) makes it DO anything; when the note isn't minimized it's a
+    /// harmless no-op, so it never steals clicks meant for buttons/editor in
+    /// the normal (non-chip) state.
+    pub restore_click: GestureClick,
     /// The wrapped content component.
     pub note_view: Rc<RefCell<NoteView>>,
 }
@@ -1927,6 +1953,19 @@ impl NoteChrome {
         // Lock toggle button: shared header treatment; glyph set by `set_locked`.
         let lock_button = Button::new();
         finish_header_button(&lock_button);
+
+        // Minimize/restore toggle: shared header treatment; glyph set by
+        // `set_minimized`. Default state (not minimized) shows the minimize glyph.
+        // Always the text glyph, never a symbolic icon lookup: "window-minimize-
+        // symbolic"/"window-restore-symbolic" aren't in `use_symbolic_icons`'s
+        // whitelist, so on a theme that has the whitelisted icons but not these
+        // two, `set_button_icon` would ask GTK for an icon name that doesn't
+        // resolve — a blank/broken button, not an automatic glyph fallback (that
+        // whitelist check is one global yes/no, not per-icon).
+        let minimize_button = Button::new();
+        finish_header_button(&minimize_button);
+        minimize_button.set_label("🗕");
+        minimize_button.set_tooltip_text(Some("Minimize"));
 
         // Pin toggle button: shared header treatment; icon/state set by `set_pinned`.
         let pin_button = Button::new();
@@ -1987,6 +2026,7 @@ impl NoteChrome {
         // Controls cluster: conflict pill + colour + lock + layer + monitor + delete.
         let controls = gtk::Box::new(Orientation::Horizontal, 0);
         controls.append(&conflict_label);
+        controls.append(&minimize_button);
         controls.append(&color_button);
         controls.append(&fit_button);
         controls.append(&copy_button);
@@ -2061,12 +2101,23 @@ impl NoteChrome {
         root.set_child(Some(&column));
         root.add_overlay(&grip);
 
+        // Bubble-phase click gesture, permanently attached to `root`. Wired
+        // (connect_released) by the Controller like every other header
+        // control; kept inert here — it only restores when the note is
+        // actually minimized, so it never interferes with normal clicks on
+        // buttons/editor content in the non-chip state. Restricted to the
+        // right mouse button (see `wire_minimize_chip_click`) so a chip can't
+        // be reopened by an accidental left click.
+        let restore_click = GestureClick::new();
+        root.add_controller(restore_click.clone());
+
         let chrome = NoteChrome {
             root,
             header,
             drag_handle,
             layer_button,
             lock_button,
+            minimize_button,
             copy_button,
             pin_button,
             monitor_button,
@@ -2075,6 +2126,8 @@ impl NoteChrome {
             grip,
             conflict_label,
             column,
+            content,
+            restore_click,
             note_view,
         };
         // Default glyph/tooltip; the real layer/lock are applied by the builder
@@ -2082,6 +2135,7 @@ impl NoteChrome {
         chrome.set_layer(&Layer::Front);
         chrome.set_locked(false);
         chrome.set_pinned(false);
+        chrome.set_minimized(false);
         chrome
     }
 
@@ -2117,6 +2171,37 @@ impl NoteChrome {
         };
         set_button_icon(&self.lock_button, icon, glyph);
         self.lock_button.set_tooltip_text(Some(tip));
+    }
+
+    /// Update the chrome to reflect whether this note is currently shrunk to its
+    /// dock chip. The actual shrink/restore (geometry + re-flow) is the
+    /// Controller's job (`minimize_note`/`restore_minimized_note`), not this
+    /// widget's; this method only ever runs AFTER that geometry change is already
+    /// committed, so it always reflects the note's true current state.
+    ///
+    /// When minimized: hide `header` (drag strip) and `content` (title-row +
+    /// controls + body) entirely, so all that's left visible is `column`'s own
+    /// background colour at its (48×48) dock-chip size — no title, no button,
+    /// just the coloured square. `restore_click` (always attached to `root`,
+    /// wired by the Controller) is what makes clicking that square restore it.
+    pub fn set_minimized(&self, minimized: bool) {
+        use gtk::prelude::WidgetExt;
+        self.header.set_visible(!minimized);
+        self.content.set_visible(!minimized);
+        if minimized {
+            self.column.add_css_class("waynote-minimized");
+        } else {
+            self.column.remove_css_class("waynote-minimized");
+        }
+    }
+
+    /// Set (or clear) the chip's hover tooltip — GTK's normal hover-and-pause
+    /// popup, showing the note's title so a minimized chip can be identified
+    /// without opening it. The Controller calls this with `Some(title)` in
+    /// `minimize_note` and `None` in `restore_minimized_note`.
+    pub fn set_chip_title(&self, title: Option<&str>) {
+        use gtk::prelude::WidgetExt;
+        self.root.set_tooltip_text(title);
     }
 
     /// Update the pin-toggle button to reflect the note's `pinned` (anchored) state.

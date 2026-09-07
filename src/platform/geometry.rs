@@ -28,6 +28,14 @@ pub fn resize_to(start: Rect, dx: i32, dy: i32, min_w: i32, min_h: i32, bounds: 
     clamp_into(resized, bounds)
 }
 
+/// PURE: true if two axis-aligned rects overlap. Touching edges (sharing just a
+/// boundary line, zero-area overlap) do NOT count — both comparisons are strict.
+/// Used to detect whether a note restored from its minimized dock slot lands on
+/// top of a note that took its place in the meantime.
+pub fn intersects(a: Rect, b: Rect) -> bool {
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+}
+
 // used in Plan 4 (drag-to-move / auto-arrange)
 #[allow(dead_code)]
 pub fn clamp_into(r: Rect, b: Rect) -> Rect {
@@ -107,5 +115,27 @@ mod tests {
         assert!(r.y >= bounds.y, "y must not go above bounds");
         assert_eq!(r.x, bounds.x, "oversized note pushed to left edge");
         assert_eq!(r.y, bounds.y, "oversized note pushed to top edge");
+    }
+
+    #[test]
+    fn intersects_true_for_overlapping_rects() {
+        let a = Rect { x: 0, y: 0, w: 100, h: 100 };
+        let b = Rect { x: 50, y: 50, w: 100, h: 100 };
+        assert!(intersects(a, b));
+        assert!(intersects(b, a), "must be symmetric");
+    }
+
+    #[test]
+    fn intersects_false_for_disjoint_rects() {
+        let a = Rect { x: 0, y: 0, w: 100, h: 100 };
+        let b = Rect { x: 200, y: 200, w: 100, h: 100 };
+        assert!(!intersects(a, b));
+    }
+
+    #[test]
+    fn intersects_false_for_merely_touching_edges() {
+        let a = Rect { x: 0, y: 0, w: 100, h: 100 };
+        let b = Rect { x: 100, y: 0, w: 100, h: 100 };
+        assert!(!intersects(a, b), "sharing only a boundary line is not an overlap");
     }
 }

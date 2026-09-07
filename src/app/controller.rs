@@ -670,6 +670,52 @@ fn wire_pin_button(
     });
 }
 
+/// Wire the per-note minimize button: click toggles between the note's normal
+/// size and its dock chip. Deferred to an idle tick like lock/pin — minimizing
+/// resizes/repositions the very widget the button lives in, and while that's
+/// less destructive than delete's widget-subtree teardown, routing it through
+/// the same idle-tick pattern as every other state-mutating header button
+/// keeps this codebase's one GTK-widget-mutation-during-its-own-click-handler
+/// convention uniform rather than making minimize the sole exception.
+fn wire_minimize_button(
+    button: &gtk::Button,
+    weak: std::rc::Weak<RefCell<Controller>>,
+    id: NoteId,
+) {
+    use gtk::prelude::ButtonExt;
+    button.connect_clicked(move |_| {
+        let (weak, id) = (weak.clone(), id.clone());
+        glib::idle_add_local_once(move || {
+            let Some(ctrl) = weak.upgrade() else { return };
+            Controller::toggle_minimize(&ctrl, &id);
+        });
+    });
+}
+
+/// Wire the always-attached right-click-to-restore gesture on a note's `root`
+/// (`chrome.restore_click`). Fires on a RIGHT click anywhere on the note —
+/// button 3 only, deliberately not the left button, so a chip can't be
+/// reopened by an accidental click (hover shows its title via
+/// `set_chip_title` instead, for identification without opening). But
+/// `restore_if_minimized` is a no-op unless the note is actually minimized, so
+/// in the normal (non-chip) state this never steals a click meant for a
+/// button or the editor.
+fn wire_minimize_chip_click(
+    gesture: &gtk::GestureClick,
+    weak: std::rc::Weak<RefCell<Controller>>,
+    id: NoteId,
+) {
+    use gtk::prelude::GestureSingleExt;
+    gesture.set_button(3);
+    gesture.connect_released(move |_, _, _, _| {
+        let (weak, id) = (weak.clone(), id.clone());
+        glib::idle_add_local_once(move || {
+            let Some(ctrl) = weak.upgrade() else { return };
+            Controller::restore_if_minimized(&ctrl, &id);
+        });
+    });
+}
+
 /// Wire the per-note copy button: click copies the note's raw markdown to the
 /// clipboard. Read-only (no mutation / no widget destruction), so it runs directly.
 fn wire_copy_button(
@@ -723,6 +769,8 @@ fn wire_header_buttons(
     wire_lock_button(&chrome.lock_button, weak.clone(), id.clone());
     wire_copy_button(&chrome.copy_button, weak.clone(), id.clone());
     wire_pin_button(&chrome.pin_button, weak.clone(), id.clone());
+    wire_minimize_button(&chrome.minimize_button, weak.clone(), id.clone());
+    wire_minimize_chip_click(&chrome.restore_click, weak.clone(), id.clone());
     wire_delete_button(&chrome.delete_button, weak.clone(), id.clone());
     populate_monitor_menu(chrome, weak, id, monitors, current_monitor);
 }
@@ -978,6 +1026,7 @@ fn make_entry(
         edit_base_hash: None,
         surface_key,
         hidden: false,
+        pre_minimize_geometry: None,
         conflict: false,
         pending_layout_save: None,
         temporarily_fronted: false,
@@ -1151,6 +1200,172 @@ fn rerender_later(note_view: &Rc<RefCell<render::NoteView>>, raw: String) {
     glib::idle_add_local_once(move || {
         render::NoteView::set_raw_and_rerender(&nv, &raw);
     });
+}
+
+impl Controller {
+    /// Minimize note `id`: remember its full geometry, shrink it to a small chip
+    /// parked in the bottom-left dock strip of its surface, then re-flow the
+    /// remaining visible notes to close the gap it left behind. The note stays a
+    /// real, visible widget on the `Fixed` at chip size — NOT `hidden` — so it
+    /// keeps receiving input (the restore click) without any new presenter/
+    /// input-region plumbing; `collect_surface_ids`/`collect_monitor_ids` simply
+    /// skip it (via `pre_minimize_geometry.is_some()`) for arrange/flow-position
+    /// purposes, same as they already skip `hidden` notes.
+    fn minimize_note(&mut self, id: &NoteId) {
+        let Some(saved_geom) = self.entries.get(id).map(|e| e.geometry.clone()) else { return };
+        let surf_idx = presenter::surface_index_for(self, id);
+        let bounds = surface_bounds(self, surf_idx);
+        let dock_index = minimized_ids_on_surface(self, surf_idx).len() as i32;
+        let slot = dock_slot_rect(bounds, dock_index);
+
+        if let Some(entry) = self.entries.get_mut(id) {
+            entry.pre_minimize_geometry = Some(saved_geom.clone());
+            entry.geometry.x = slot.x;
+            entry.geometry.y = slot.y;
+            entry.geometry.w = slot.w;
+            entry.geometry.h = slot.h;
+        }
+        if let Some(nv) = self.entries.get(id).map(|e| e.chrome.note_view.clone()) {
+            render::NoteView::set_content_width_and_rerender(&nv, content_width_for(slot.w));
+        }
+        if let Some(entry) = self.entries.get(id) {
+            entry.chrome.set_minimized(true);
+            let title = entry.note.title();
+            entry.chrome.set_chip_title(Some(&title));
+        }
+
+        // Close the gap: shift LEFT only the notes that shared `id`'s row AND sat
+        // to its right — nothing else moves. (NOT a full `arrange_grid` re-flow:
+        // that recomputes every note's slot from scratch in id/creation order,
+        // which throws away whatever multi-row layout the user actually had and
+        // can visually re-sort notes by size as rows repack — exactly the bug
+        // reported live. This is a row-local shift instead.)
+        self.close_gap_in_row(surf_idx, &saved_geom);
+
+        let geoms: Vec<(NoteId, Geometry)> = collect_surface_ids(self, surf_idx)
+            .into_iter()
+            .filter_map(|nid| self.entries.get(&nid).map(|e| (nid, e.geometry.clone())))
+            .collect();
+        for (nid, geom) in geoms {
+            self.layout.set(&nid, geom);
+        }
+        if let Err(e) = layout::save(&self.paths, &self.layout) {
+            eprintln!("[waynote] minimize_note: layout save failed: {e}");
+        }
+
+        presenter::sync_surface(self, surf_idx);
+    }
+
+    /// Shift left, by exactly the width `removed` freed up (plus the standard
+    /// arrange gap), every visible note that shares `removed`'s row (its y-range
+    /// overlaps `removed`'s) AND sat to its right (`x > removed.x`). Every note in
+    /// a different row, or to the left in the same row, is left exactly where it
+    /// was — this is deliberately NOT a full re-arrange.
+    fn close_gap_in_row(&mut self, surf_idx: usize, removed: &Geometry) {
+        const GAP: i32 = 16;
+        let shift = removed.w + GAP;
+
+        let mut to_shift: Vec<NoteId> = collect_surface_ids(self, surf_idx)
+            .into_iter()
+            .filter(|id| {
+                let g = &self.entries[id].geometry;
+                let same_row = g.y < removed.y + removed.h && removed.y < g.y + g.h;
+                same_row && g.x > removed.x
+            })
+            .collect();
+        // Shift the leftmost of the row first — order doesn't change the result
+        // (each note moves by the same fixed `shift`), kept only for determinism.
+        to_shift.sort_by_key(|id| self.entries[id].geometry.x);
+
+        for id in to_shift {
+            if let Some(entry) = self.entries.get_mut(&id) {
+                entry.geometry.x -= shift;
+            }
+        }
+    }
+
+    /// Restore a minimized note: put it back at its saved (pre-minimize) geometry
+    /// exactly, then displace — to the next open flow slot, and ONLY those notes,
+    /// not a full re-arrange — whichever visible note(s) now overlap it. Everything
+    /// else on the surface stays exactly where the user left it.
+    fn restore_minimized_note(&mut self, id: &NoteId) {
+        let Some(target) = self.entries.get(id).and_then(|e| e.pre_minimize_geometry.clone())
+        else {
+            return;
+        };
+        let surf_idx = presenter::surface_index_for(self, id);
+
+        if let Some(entry) = self.entries.get_mut(id) {
+            entry.pre_minimize_geometry = None;
+            entry.geometry = target.clone();
+        }
+        if let Some(nv) = self.entries.get(id).map(|e| e.chrome.note_view.clone()) {
+            render::NoteView::set_content_width_and_rerender(&nv, content_width_for(target.w));
+        }
+        if let Some(entry) = self.entries.get(id) {
+            entry.chrome.set_minimized(false);
+            entry.chrome.set_chip_title(None);
+        }
+
+        // `id` is visible again as of the mutation above, so it now shows up in
+        // collect_surface_ids — displace_overlapping's occupancy scan sees it.
+        self.displace_overlapping(id, surf_idx);
+
+        let geoms: Vec<(NoteId, Geometry)> = collect_surface_ids(self, surf_idx)
+            .into_iter()
+            .filter_map(|nid| self.entries.get(&nid).map(|e| (nid, e.geometry.clone())))
+            .collect();
+        for (nid, geom) in geoms {
+            self.layout.set(&nid, geom);
+        }
+        if let Err(e) = layout::save(&self.paths, &self.layout) {
+            eprintln!("[waynote] restore_minimized_note: layout save failed: {e}");
+        }
+        presenter::sync_surface(self, surf_idx);
+    }
+
+    /// Move just the note(s) whose rect now overlaps `fixed_id`'s rect — to the
+    /// next open flow slot each, via the SAME placement logic new notes use — and
+    /// leave every other note on the surface untouched. NOT a full re-arrange:
+    /// only overlap victims move.
+    fn displace_overlapping(&mut self, fixed_id: &NoteId, surf_idx: usize) {
+        let Some(fixed_rect) = self.entries.get(fixed_id).map(|e| e.geometry.clone()) else {
+            return;
+        };
+        let fixed_rect = Rect { x: fixed_rect.x, y: fixed_rect.y, w: fixed_rect.w, h: fixed_rect.h };
+        let bounds = surface_bounds(self, surf_idx);
+
+        let colliding: Vec<NoteId> = collect_surface_ids(self, surf_idx)
+            .into_iter()
+            .filter(|other_id| other_id != fixed_id)
+            .filter(|other_id| {
+                let g = &self.entries[other_id].geometry;
+                let r = Rect { x: g.x, y: g.y, w: g.w, h: g.h };
+                crate::platform::geometry::intersects(fixed_rect, r)
+            })
+            .collect();
+
+        for other_id in colliding {
+            let existing_sizes: Vec<(i32, i32)> = collect_surface_ids(self, surf_idx)
+                .into_iter()
+                .filter(|nid| *nid != other_id)
+                .map(|nid| {
+                    let g = &self.entries[&nid].geometry;
+                    (g.w, g.h)
+                })
+                .collect();
+            let size = {
+                let g = &self.entries[&other_id].geometry;
+                (g.w, g.h)
+            };
+            let slot = next_flow_position(&existing_sizes, size, bounds, (24, 48), 16);
+            if let Some(entry) = self.entries.get_mut(&other_id) {
+                entry.geometry.x = slot.x;
+                entry.geometry.y = slot.y;
+            }
+        }
+    }
+
 }
 
 // ── Task 9 (C1): wire drag+resize — implement DragResizeHandler for Controller ──
@@ -1682,6 +1897,43 @@ impl Controller {
         self.entries.get(id).map(|e| e.note.locked).unwrap_or(false)
     }
 
+    /// Toggle note `id` between its normal size and its minimized dock chip.
+    /// Unlike `toggle_pin`/`toggle_lock`, minimize is transient geometry state
+    /// (like `hidden`), not a persisted frontmatter flag — so this does NOT go
+    /// through `defer_after_edit_commit`/`persist_entry`; it follows
+    /// `commit_move`/`commit_resize`'s plain geometry-mutation shape instead.
+    pub fn toggle_minimize(this: &Rc<RefCell<Self>>, id: &NoteId) {
+        let is_minimized = this
+            .borrow()
+            .entries
+            .get(id)
+            .map(|e| e.pre_minimize_geometry.is_some())
+            .unwrap_or(false);
+        let mut c = this.borrow_mut();
+        if is_minimized {
+            c.restore_minimized_note(id);
+        } else {
+            c.minimize_note(id);
+        }
+    }
+
+    /// Restore note `id` if (and only if) it's currently minimized; a no-op
+    /// otherwise. Backs the dock chip's click-to-restore gesture
+    /// (`restore_click`, wired to every note's `root` unconditionally) — the
+    /// check here, not the wiring, is what keeps a click on a normal-sized
+    /// note's body/buttons from ever minimizing or restoring anything.
+    pub fn restore_if_minimized(this: &Rc<RefCell<Self>>, id: &NoteId) {
+        let is_minimized = this
+            .borrow()
+            .entries
+            .get(id)
+            .map(|e| e.pre_minimize_geometry.is_some())
+            .unwrap_or(false);
+        if is_minimized {
+            this.borrow_mut().restore_minimized_note(id);
+        }
+    }
+
     /// Set `note.color` for `id`, persist the `.md`, and recolor the chrome.
     ///
     /// Unknown colors are ignored (keeps the existing color + logs). Valid
@@ -2028,7 +2280,11 @@ fn collect_surface_ids(ctrl: &Controller, surf_idx: usize) -> Vec<NoteId> {
     let mut ids: Vec<NoteId> = ctrl
         .entries
         .iter()
-        .filter(|(id, e)| !e.hidden && presenter::surface_index_for(ctrl, id) == surf_idx)
+        .filter(|(id, e)| {
+            !e.hidden
+                && e.pre_minimize_geometry.is_none()
+                && presenter::surface_index_for(ctrl, id) == surf_idx
+        })
         .map(|(id, _)| id.clone())
         .collect();
     ids.sort();
@@ -2046,11 +2302,52 @@ fn collect_monitor_ids(ctrl: &Controller, monitor_idx: usize) -> Vec<NoteId> {
     let mut ids: Vec<NoteId> = ctrl
         .entries
         .iter()
-        .filter(|(id, e)| !e.hidden && presenter::monitor_for(ctrl, id) == monitor_idx)
+        .filter(|(id, e)| {
+            !e.hidden
+                && e.pre_minimize_geometry.is_none()
+                && presenter::monitor_for(ctrl, id) == monitor_idx
+        })
         .map(|(id, _)| id.clone())
         .collect();
     ids.sort();
     ids
+}
+
+/// Ids of entries currently minimized on surface `surf_idx`, sorted by id —
+/// same "sort by id" convention as `collect_surface_ids` — so a note's dock
+/// slot index is deterministic regardless of `HashMap` iteration order.
+fn minimized_ids_on_surface(ctrl: &Controller, surf_idx: usize) -> Vec<NoteId> {
+    let mut ids: Vec<NoteId> = ctrl
+        .entries
+        .iter()
+        .filter(|(id, e)| {
+            e.pre_minimize_geometry.is_some() && presenter::surface_index_for(ctrl, id) == surf_idx
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Square size of a minimized note's dock chip, in surface-local pixels.
+const DOCK_CHIP_SIZE: i32 = 48;
+/// Inset of the dock strip from the surface's left/bottom edges.
+const DOCK_MARGIN: i32 = 12;
+/// Gap between adjacent dock chips.
+const DOCK_GAP: i32 = 8;
+
+/// Top-left rect of the `index`-th (0-based) chip slot in the bottom-left
+/// minimized-note dock strip for a surface with these `bounds`. Chips pack
+/// left-to-right; this strip is NOT reserved space in `arrange_grid`'s bounds
+/// (a manually-dragged full-size note could in principle end up on top of it) —
+/// a known v1 limitation, not a bug.
+fn dock_slot_rect(bounds: crate::platform::geometry::Rect, index: i32) -> crate::platform::geometry::Rect {
+    crate::platform::geometry::Rect {
+        x: bounds.x + DOCK_MARGIN + index * (DOCK_CHIP_SIZE + DOCK_GAP),
+        y: bounds.y + bounds.h - DOCK_MARGIN - DOCK_CHIP_SIZE,
+        w: DOCK_CHIP_SIZE,
+        h: DOCK_CHIP_SIZE,
+    }
 }
 
 /// The bounds for drag/resize clamping + arrange on surface `surf_idx`: the
@@ -2254,6 +2551,7 @@ impl Controller {
                 edit_base_hash: None,
                 surface_key: surface_key.clone(),
                 hidden: false,
+                pre_minimize_geometry: None,
                 conflict: false,
                 pending_layout_save: None,
                 temporarily_fronted: false,

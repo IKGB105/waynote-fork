@@ -54,6 +54,13 @@ pub struct NoteEntry {
     #[allow(dead_code)]
     pub surface_key: SurfaceKey,
     pub hidden: bool,
+    /// `Some(geometry)` while this note is minimized to its dock chip — the full
+    /// geometry to restore when un-minimized. `None` for a normal note. Transient
+    /// (like `hidden`): not persisted to frontmatter, lost on restart. Notes with
+    /// this set are excluded from `collect_surface_ids`/`collect_monitor_ids` so
+    /// arrange/flow-position treat the chip as absent, even though — unlike
+    /// `hidden` — the note stays on the surface `Fixed` (visible, just tiny).
+    pub pre_minimize_geometry: Option<Geometry>,
     /// Set when the last save attempt produced a conflict copy; cleared on the
     /// next successful save. The chrome shows a ⚠ pill while this is true.
     pub conflict: bool,

@@ -213,6 +213,12 @@ for my own daily-driver use:
   default size on every call.
 - **Global font-scale setting**, adjustable live from the tray menu
   ("Font size +" / "Font size −", 0.5×–3×) and persisted across restarts.
+- **Minimize to a dock chip.** Shrink a note to a small coloured square parked
+  in the bottom-left corner of its monitor; the notes that shared its row
+  shift left to close the gap. Right-click the chip to restore it to its exact
+  saved position (hovering shows the note's title first, so you know what
+  you're opening). This state doesn't persist across a restart — a minimized
+  note comes back full-size on next launch.
 
 ## Status
 
