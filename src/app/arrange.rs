@@ -76,13 +76,15 @@ pub fn next_flow_position(
         .unwrap_or(Rect { x: bounds.x + margin.0, y: bounds.y + margin.1, w: new_size.0, h: new_size.1 })
 }
 
-/// Total width of up to 2 items placed side by side with `gap` between them —
-/// the "row span" a 2×2 block's top or bottom half occupies.
-fn row_span_width(items: &[(i32, i32)], gap: i32) -> i32 {
-    match items {
-        [] => 0,
-        [(w, _)] => *w,
-        [(w0, _), (w1, _), ..] => w0 + gap + w1,
+/// Combined height of a 2×2 block's column — its top note's height, plus `gap`
+/// plus its bottom note's height IF there's a bottom note, else just the top
+/// note's height alone. `None`/`None` (an empty column, only possible for the
+/// right column of a 1-note trailing block) is 0.
+fn column_height(top: Option<(i32, i32)>, bottom: Option<(i32, i32)>, gap: i32) -> i32 {
+    match (top, bottom) {
+        (Some((_, top_h)), Some((_, bottom_h))) => top_h + gap + bottom_h,
+        (Some((_, h)), None) | (None, Some((_, h))) => h,
+        (None, None) => 0,
     }
 }
 
@@ -95,6 +97,13 @@ fn row_span_width(items: &[(i32, i32)], gap: i32) -> i32 {
 /// still gets a deterministic slot. A trailing partial block (id count not a
 /// multiple of 4) just has fewer of its 4 slots filled — 3 notes make an
 /// "L" (top-left, top-right, bottom-left), 2 make a top row, 1 sits alone.
+///
+/// Each of the block's two COLUMNS stacks independently: a column's bottom
+/// note starts right after ITS OWN top note's actual height, not a height
+/// shared across the whole block — so a short top-left note doesn't leave a
+/// dead gap above bottom-left just because top-right happens to be taller.
+/// The two columns still share one starting row (both top notes align at the
+/// block's top edge) and the block still wraps as one unit.
 pub fn arrange_blocks(
     ids: &[NoteId],
     sizes: &[(i32, i32)],
@@ -109,12 +118,15 @@ pub fn arrange_blocks(
     let mut out = Vec::with_capacity(ids.len());
 
     for (chunk_ids, chunk_sizes) in ids.chunks(4).zip(sizes.chunks(4)) {
-        let top = &chunk_sizes[..chunk_sizes.len().min(2)];
-        let bottom = if chunk_sizes.len() > 2 { &chunk_sizes[2..] } else { &[] };
-        let top_h = top.iter().map(|&(_, h)| h).max().unwrap_or(0);
-        let bottom_h = bottom.iter().map(|&(_, h)| h).max().unwrap_or(0);
-        let block_w = row_span_width(top, gap).max(row_span_width(bottom, gap));
-        let block_h = if bottom.is_empty() { top_h } else { top_h + gap + bottom_h };
+        let top_left = chunk_sizes.first().copied();
+        let top_right = chunk_sizes.get(1).copied();
+        let bottom_left = chunk_sizes.get(2).copied();
+        let bottom_right = chunk_sizes.get(3).copied();
+
+        let col0_w = [top_left, bottom_left].into_iter().flatten().map(|(w, _)| w).max().unwrap_or(0);
+        let col1_w = [top_right, bottom_right].into_iter().flatten().map(|(w, _)| w).max().unwrap_or(0);
+        let block_w = if col1_w > 0 { col0_w + gap + col1_w } else { col0_w };
+        let block_h = column_height(top_left, bottom_left, gap).max(column_height(top_right, bottom_right, gap));
 
         if block_x != margin.0 && block_x + block_w > right_edge {
             block_x = margin.0;
@@ -122,17 +134,19 @@ pub fn arrange_blocks(
             row_of_blocks_h = 0;
         }
 
-        let mut place_row = |row_ids: &[NoteId], row_sizes: &[(i32, i32)], row_y: i32| {
-            let mut x = block_x;
-            for (id, &(w, h)) in row_ids.iter().zip(row_sizes.iter()) {
-                out.push((id.clone(), Rect { x: bounds.x + x, y: bounds.y + row_y, w, h }));
-                x += w + gap;
+        let col1_x = block_x + col0_w + gap;
+        let bottom_left_y = y + top_left.map(|(_, h)| h + gap).unwrap_or(0);
+        let bottom_right_y = y + top_right.map(|(_, h)| h + gap).unwrap_or(0);
+
+        let mut place = |maybe_id: Option<&NoteId>, size: Option<(i32, i32)>, x: i32, slot_y: i32| {
+            if let (Some(id), Some((w, h))) = (maybe_id, size) {
+                out.push((id.clone(), Rect { x: bounds.x + x, y: bounds.y + slot_y, w, h }));
             }
         };
-        place_row(&chunk_ids[..chunk_ids.len().min(2)], top, y);
-        if chunk_ids.len() > 2 {
-            place_row(&chunk_ids[2..], bottom, y + top_h + gap);
-        }
+        place(chunk_ids.first(), top_left, block_x, y);
+        place(chunk_ids.get(1), top_right, col1_x, y);
+        place(chunk_ids.get(2), bottom_left, block_x, bottom_left_y);
+        place(chunk_ids.get(3), bottom_right, col1_x, bottom_right_y);
 
         block_x += block_w + gap;
         row_of_blocks_h = row_of_blocks_h.max(block_h);
@@ -310,5 +324,30 @@ mod tests {
             assert_eq!(out[i].1.w, w, "note {i} keeps its own width");
             assert_eq!(out[i].1.h, h, "note {i} keeps its own height");
         }
+    }
+
+    #[test]
+    fn arrange_blocks_columns_stack_independently_no_shared_row_height() {
+        // top-left is short (100), top-right is tall (300). bottom-left must
+        // start right after top-left's OWN height, not top-right's — a short
+        // note in one column shouldn't leave a dead gap above its own
+        // column's bottom note just because the other column is taller.
+        let ids = ids(&["tl", "tr", "bl", "br"]);
+        let sizes = [(200, 100), (200, 300), (200, 120), (200, 80)];
+        let bounds = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        let out = arrange_blocks(&ids, &sizes, bounds, (0, 0), 10);
+
+        assert_eq!(out[0].1, Rect { x: 0, y: 0, w: 200, h: 100 }, "top-left");
+        assert_eq!(out[1].1, Rect { x: 210, y: 0, w: 200, h: 300 }, "top-right");
+        assert_eq!(
+            out[2].1,
+            Rect { x: 0, y: 110, w: 200, h: 120 },
+            "bottom-left starts right after top-left's own 100px height, not top-right's 300px"
+        );
+        assert_eq!(
+            out[3].1,
+            Rect { x: 210, y: 310, w: 200, h: 80 },
+            "bottom-right starts right after top-right's own 300px height"
+        );
     }
 }
