@@ -2715,7 +2715,7 @@ impl Controller {
             // config default) reads better once you have more than a
             // couple - see theme::random_color.
             let color = crate::core::theme::random_color(&id);
-            let note = new_note(id.clone(), color, &default_layer);
+            let mut note = new_note(id.clone(), color, &default_layer);
             let cursor = cursor_monitor_index(&c.monitors);
             let monitor_idx = active_monitor(
                 explicit_output,
@@ -2739,6 +2739,18 @@ impl Controller {
             let layer = surface_layer_of(&note.layer);
             let n_surfs = c.manager.surfaces().len();
             let surf_idx = c.manager.index_of(monitor_idx, layer).min(n_surfs.saturating_sub(1));
+            // Land at the end of the manual arrange order too (highest number
+            // on this surface + 1), so a new note gets a real number right
+            // away instead of showing "–" until the next restart's
+            // `assign_missing_order` backfills it.
+            note.order = Some(
+                collect_surface_ids(&c, surf_idx)
+                    .iter()
+                    .filter_map(|nid| c.entries.get(nid).and_then(|e| e.note.order))
+                    .max()
+                    .unwrap_or(0)
+                    + 1,
+            );
             let existing_sizes: Vec<(i32, i32)> = collect_monitor_ids(&c, monitor_idx)
                 .iter()
                 .map(|eid| {
