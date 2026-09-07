@@ -189,6 +189,7 @@ impl Controller {
             for (id, _, _) in missing {
                 if let Some(entry) = self.entries.get_mut(&id) {
                     entry.note.order = Some(next);
+                    entry.chrome.set_order(Some(next));
                     persist_entry(entry, now_ts());
                 }
                 next += 1;
@@ -1188,6 +1189,7 @@ fn build_chrome(
     chrome.set_layer(&note.layer);
     chrome.set_locked(note.locked);
     chrome.set_pinned(note.pinned);
+    chrome.set_order(note.order);
     chrome.root.set_size_request(rect.w, rect.h);
     chrome
 }
@@ -2038,9 +2040,11 @@ impl Controller {
             let mut c = this.borrow_mut();
             if let Some(e) = c.entries.get_mut(id) {
                 e.note.order = Some(neighbor_order);
+                e.chrome.set_order(Some(neighbor_order));
             }
             if let Some(e) = c.entries.get_mut(&neighbor_id) {
                 e.note.order = Some(this_order);
+                e.chrome.set_order(Some(this_order));
             }
             let a = c.entries.get_mut(id).map(|e| persist_entry(e, now_ts()));
             let b = c.entries.get_mut(&neighbor_id).map(|e| persist_entry(e, now_ts()));

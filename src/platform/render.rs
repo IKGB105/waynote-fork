@@ -212,6 +212,13 @@ const CARD_CSS: &str = "
     font-weight: 600;
     color: #6E6447;
 }
+/* Manual arrange-order number, between the ▲/▼ nudge buttons. */
+.waynote-order-label {
+    font-size: 0.78em;
+    font-weight: 600;
+    color: #6E6447;
+    min-width: 1.2em;
+}
 /* Per-note layer toggle: a flat, unframed, muted glyph button that fits the
    warm-paper chrome. Sits in the header's controls cluster (never the drag
    handle), so clicking it never starts a drag. */
@@ -1885,6 +1892,10 @@ pub struct NoteChrome {
     /// Nudge this note's manual arrange `order` later — swaps it with the
     /// nearest higher-numbered note on the same surface. See `order_up_button`.
     pub order_down_button: Button,
+    /// The note's current manual arrange `order`, shown as plain text between
+    /// the ▲/▼ buttons. The Controller updates it via `set_order` whenever the
+    /// value changes (auto-assign at startup, or a nudge).
+    order_label: Label,
     /// Per-note "move to monitor" button: a plain `Button` with a manually-parented
     /// popover (`monitor_popover`) listing the available monitors. Hidden unless
     /// there is more than one; the Controller populates it via `set_monitor_menu`.
@@ -2001,6 +2012,12 @@ impl NoteChrome {
         order_down_button.set_label("↓");
         order_down_button.set_tooltip_text(Some("Move later in Arrange order"));
 
+        let order_label = Label::new(None);
+        order_label.add_css_class("waynote-order-label");
+        order_label.set_can_focus(false);
+        order_label.set_valign(gtk::Align::Center);
+        order_label.set_tooltip_text(Some("Arrange order"));
+
         // Colour picker button (Button + manual swatch popover).
         let color_button = build_color_button(&note_view.borrow().handler_sink());
 
@@ -2064,6 +2081,7 @@ impl NoteChrome {
         controls.append(&layer_button);
         controls.append(&pin_button);
         controls.append(&order_up_button);
+        controls.append(&order_label);
         controls.append(&order_down_button);
         controls.append(&monitor_button);
         controls.append(&delete_button);
@@ -2154,6 +2172,7 @@ impl NoteChrome {
             pin_button,
             order_up_button,
             order_down_button,
+            order_label,
             monitor_button,
             monitor_popover,
             delete_button,
@@ -2258,6 +2277,17 @@ impl NoteChrome {
         }
         // A pinned note's layer is frozen: disable the ▲/▼ toggle.
         self.layer_button.set_sensitive(!pinned);
+    }
+
+    /// Update the visible arrange-order number between the ▲/▼ buttons. `None`
+    /// (no order assigned yet — shouldn't normally happen past startup, see
+    /// `Controller::assign_missing_order`) shows as "–" rather than blank, so
+    /// the label never looks broken/empty.
+    pub fn set_order(&self, order: Option<i32>) {
+        match order {
+            Some(n) => self.order_label.set_label(&n.to_string()),
+            None => self.order_label.set_label("–"),
+        }
     }
 
     /// Populate the "move to monitor" menu with one row per *destination* monitor
