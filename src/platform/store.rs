@@ -309,6 +309,7 @@ mod tests {
             pinned: true,
             locked: false,
             layer: Layer::Desktop,
+            order: None,
             tags: vec!["inbox".to_string(), "work".to_string()],
             extra,
             body: "# My Note\nsome body\n".to_string(),

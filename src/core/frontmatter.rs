@@ -15,6 +15,8 @@ struct Frontmatter {
     #[serde(default)]
     layer: Layer,
     #[serde(default)]
+    order: Option<i32>,
+    #[serde(default)]
     tags: Vec<String>,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_yaml_ng::Value>,
@@ -28,6 +30,7 @@ impl Default for Frontmatter {
             pinned: false,
             locked: false,
             layer: Layer::default(),
+            order: None,
             tags: vec![],
             extra: BTreeMap::new(),
         }
@@ -52,6 +55,7 @@ pub fn parse(file_contents: &str) -> Note {
         pinned: frontmatter.pinned,
         locked: frontmatter.locked,
         layer: frontmatter.layer,
+        order: frontmatter.order,
         tags: frontmatter.tags,
         extra: frontmatter.extra,
         body: body.to_string(),
@@ -111,6 +115,9 @@ fn serialize_to_yaml(note: &Note) -> String {
         Layer::Desktop => "desktop",
     };
     mapping.insert(yaml_str("layer"), yaml_str(layer_str));
+    if let Some(order) = note.order {
+        mapping.insert(yaml_str("order"), serde_yaml_ng::Value::Number(order.into()));
+    }
     let tags: Vec<serde_yaml_ng::Value> = note.tags.iter().map(|t| yaml_str(t)).collect();
     mapping.insert(yaml_str("tags"), serde_yaml_ng::Value::Sequence(tags));
     for (k, v) in &note.extra {
@@ -207,6 +214,7 @@ body here
             pinned: false,
             locked: false,
             layer: Layer::Front,
+            order: None,
             tags: vec![],
             extra: BTreeMap::new(),
             body: "body\n".to_string(),
@@ -229,6 +237,28 @@ body here
         let s = serialize(&note);
         assert!(s.contains("locked: true"), "serialize should emit locked: true");
         assert!(parse(&s).locked, "round-trip should preserve locked");
+    }
+
+    #[test]
+    fn order_defaults_none_when_absent() {
+        let note = parse("---\nid: a\n---\nbody\n");
+        assert_eq!(note.order, None);
+    }
+
+    #[test]
+    fn order_parses_and_round_trips() {
+        let note = parse("---\nid: a\norder: 3\n---\nbody\n");
+        assert_eq!(note.order, Some(3));
+        let s = serialize(&note);
+        assert!(s.contains("order: 3"), "serialize should emit order: 3");
+        assert_eq!(parse(&s).order, Some(3), "round-trip should preserve order");
+    }
+
+    #[test]
+    fn serialize_omits_order_key_when_none() {
+        let note = parse("---\nid: a\n---\nbody\n");
+        let s = serialize(&note);
+        assert!(!s.contains("order:"), "no order key should be written when None");
     }
 
     #[test]

@@ -1,9 +1,12 @@
 //! Auto-arrange: lay out notes into a deterministic left-to-right, top-to-bottom
 //! flow within a surface's bounds. PURE — no GTK, no I/O.
 //!
-//! Row-major order: notes fill a row left-to-right, then wrap to the next row
-//! when they'd overflow the surface width. Each note keeps its OWN current
-//! size — arrange only repositions, it never resizes.
+//! Two flow orders: `arrange_grid` fills a row left-to-right, wrapping to the
+//! next row when it would overflow the surface width (used for single-note
+//! placement — a new note, a restored note's overlap-displacement target).
+//! `arrange_blocks` groups notes into fixed 2×2 blocks instead (used by the
+//! "Arrange" action) — both keep each note's OWN current size; arrange only
+//! repositions, it never resizes.
 
 use crate::platform::geometry::Rect;
 
@@ -71,6 +74,71 @@ pub fn next_flow_position(
         .pop()
         .map(|(_, r)| r)
         .unwrap_or(Rect { x: bounds.x + margin.0, y: bounds.y + margin.1, w: new_size.0, h: new_size.1 })
+}
+
+/// Total width of up to 2 items placed side by side with `gap` between them —
+/// the "row span" a 2×2 block's top or bottom half occupies.
+fn row_span_width(items: &[(i32, i32)], gap: i32) -> i32 {
+    match items {
+        [] => 0,
+        [(w, _)] => *w,
+        [(w0, _), (w1, _), ..] => w0 + gap + w1,
+    }
+}
+
+/// PURE: like `arrange_grid`, but groups `ids` into fixed 2×2 blocks (top-left,
+/// top-right, bottom-left, bottom-right, taken 4 at a time in `ids`' order)
+/// instead of one width-driven row flow. A block fills both its own rows
+/// before the next block starts, immediately to its right; blocks wrap to a
+/// new row of blocks using the same rule `arrange_grid` uses for notes — the
+/// first block in a row-of-blocks is never wrapped, so an oversized block
+/// still gets a deterministic slot. A trailing partial block (id count not a
+/// multiple of 4) just has fewer of its 4 slots filled — 3 notes make an
+/// "L" (top-left, top-right, bottom-left), 2 make a top row, 1 sits alone.
+pub fn arrange_blocks(
+    ids: &[NoteId],
+    sizes: &[(i32, i32)],
+    bounds: Rect,
+    margin: (i32, i32),
+    gap: i32,
+) -> Vec<(NoteId, Rect)> {
+    let right_edge = bounds.w;
+    let mut block_x = margin.0;
+    let mut y = margin.1;
+    let mut row_of_blocks_h = 0;
+    let mut out = Vec::with_capacity(ids.len());
+
+    for (chunk_ids, chunk_sizes) in ids.chunks(4).zip(sizes.chunks(4)) {
+        let top = &chunk_sizes[..chunk_sizes.len().min(2)];
+        let bottom = if chunk_sizes.len() > 2 { &chunk_sizes[2..] } else { &[] };
+        let top_h = top.iter().map(|&(_, h)| h).max().unwrap_or(0);
+        let bottom_h = bottom.iter().map(|&(_, h)| h).max().unwrap_or(0);
+        let block_w = row_span_width(top, gap).max(row_span_width(bottom, gap));
+        let block_h = if bottom.is_empty() { top_h } else { top_h + gap + bottom_h };
+
+        if block_x != margin.0 && block_x + block_w > right_edge {
+            block_x = margin.0;
+            y += row_of_blocks_h + gap;
+            row_of_blocks_h = 0;
+        }
+
+        let mut place_row = |row_ids: &[NoteId], row_sizes: &[(i32, i32)], row_y: i32| {
+            let mut x = block_x;
+            for (id, &(w, h)) in row_ids.iter().zip(row_sizes.iter()) {
+                out.push((id.clone(), Rect { x: bounds.x + x, y: bounds.y + row_y, w, h }));
+                x += w + gap;
+            }
+        };
+        place_row(&chunk_ids[..chunk_ids.len().min(2)], top, y);
+        if chunk_ids.len() > 2 {
+            place_row(&chunk_ids[2..], bottom, y + top_h + gap);
+        }
+
+        block_x += block_w + gap;
+        row_of_blocks_h = row_of_blocks_h.max(block_h);
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -174,5 +242,73 @@ mod tests {
         let sizes = [(240, 200), (240, 200), (240, 200)];
         let out = arrange_grid(&ids, &sizes, Rect { x: 0, y: 0, w: 1920, h: 1080 }, (0, 0), 8);
         assert_eq!(out.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["z", "m", "a"]);
+    }
+
+    #[test]
+    fn arrange_blocks_fills_a_2x2_block_top_row_then_bottom_row() {
+        // Exactly the order asked for: 1,2 on top, 3,4 below them, in ONE
+        // block, before a second block starts.
+        let ids = ids(&["1", "2", "3", "4"]);
+        let sizes = [(200, 100); 4];
+        let bounds = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        let out = arrange_blocks(&ids, &sizes, bounds, (0, 0), 10);
+
+        assert_eq!(out[0].1, Rect { x: 0, y: 0, w: 200, h: 100 }, "1: top-left");
+        assert_eq!(out[1].1, Rect { x: 210, y: 0, w: 200, h: 100 }, "2: top-right");
+        assert_eq!(out[2].1, Rect { x: 0, y: 110, w: 200, h: 100 }, "3: bottom-left");
+        assert_eq!(out[3].1, Rect { x: 210, y: 110, w: 200, h: 100 }, "4: bottom-right");
+    }
+
+    #[test]
+    fn arrange_blocks_starts_the_next_block_to_the_right_after_both_rows() {
+        // 8 notes, 2 blocks: 5-8 must start a fresh block to the right of
+        // 1-4, back at the top row — not continue row 0 or row 1 directly.
+        let ids = ids(&["1", "2", "3", "4", "5", "6", "7", "8"]);
+        let sizes = [(200, 100); 8];
+        let bounds = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        let out = arrange_blocks(&ids, &sizes, bounds, (0, 0), 10);
+
+        assert_eq!(out[4].1, Rect { x: 420, y: 0, w: 200, h: 100 }, "5: top-left of block 2");
+        assert_eq!(out[5].1, Rect { x: 630, y: 0, w: 200, h: 100 }, "6: top-right of block 2");
+        assert_eq!(out[6].1, Rect { x: 420, y: 110, w: 200, h: 100 }, "7: bottom-left of block 2");
+        assert_eq!(out[7].1, Rect { x: 630, y: 110, w: 200, h: 100 }, "8: bottom-right of block 2");
+    }
+
+    #[test]
+    fn arrange_blocks_wraps_to_a_new_row_of_blocks_when_it_overflows() {
+        // Bounds only wide enough for ONE block (2×200 + gap = 410); a second
+        // block must wrap below, not spill past the right edge.
+        let ids = ids(&["1", "2", "3", "4", "5", "6", "7", "8"]);
+        let sizes = [(200, 100); 8];
+        let bounds = Rect { x: 0, y: 0, w: 420, h: 1080 };
+        let out = arrange_blocks(&ids, &sizes, bounds, (0, 0), 10);
+
+        assert_eq!(out[4].1.x, 0, "second block wraps back to the left edge");
+        assert_eq!(out[4].1.y, 220, "second block starts below the first block's full height (100+10+100)");
+    }
+
+    #[test]
+    fn arrange_blocks_trailing_partial_block_only_fills_what_it_has() {
+        // 3 notes: top-left, top-right, bottom-left — no bottom-right.
+        let ids = ids(&["1", "2", "3"]);
+        let sizes = [(200, 100); 3];
+        let bounds = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        let out = arrange_blocks(&ids, &sizes, bounds, (0, 0), 10);
+
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[2].1, Rect { x: 0, y: 110, w: 200, h: 100 }, "3: bottom-left, alone in row 1");
+    }
+
+    #[test]
+    fn arrange_blocks_preserves_each_notes_own_size() {
+        let ids = ids(&["1", "2", "3", "4"]);
+        let sizes = [(400, 150), (180, 260), (220, 90), (300, 200)];
+        let bounds = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        let out = arrange_blocks(&ids, &sizes, bounds, (0, 0), 10);
+
+        for (i, &(w, h)) in sizes.iter().enumerate() {
+            assert_eq!(out[i].1.w, w, "note {i} keeps its own width");
+            assert_eq!(out[i].1.h, h, "note {i} keeps its own height");
+        }
     }
 }

@@ -18,6 +18,12 @@ pub struct Note {
     /// while true. Moving/resizing/recolouring/layer/pin/delete still work.
     pub locked: bool,
     pub layer: Layer,
+    /// Manual arrange priority: the "Arrange" action sorts notes by this
+    /// (lowest first) before laying them out. `None` until
+    /// `Controller::assign_missing_order` auto-assigns one at startup
+    /// (leftmost note = 1); the ▲/▼ header buttons swap a note's value with
+    /// its nearest lower/higher neighbor on the same surface from then on.
+    pub order: Option<i32>,
     pub tags: Vec<String>,
     pub extra: BTreeMap<String, serde_yaml_ng::Value>,
     pub body: String,
@@ -99,6 +105,7 @@ mod tests {
             pinned: false,
             locked: false,
             layer: Layer::Front,
+            order: None,
             tags: vec![],
             extra: BTreeMap::new(),
             body: body.to_string(),

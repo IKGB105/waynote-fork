@@ -1877,6 +1877,14 @@ pub struct NoteChrome {
     /// from durable layer changes (its `layer_button` is disabled). The Controller
     /// wires its click + updates state via `set_pinned`.
     pub pin_button: Button,
+    /// Nudge this note's manual arrange `order` earlier — swaps it with the
+    /// nearest lower-numbered note on the same surface. The Controller wires
+    /// its click (`wire_order_buttons`). No visible on/off state (unlike
+    /// pin/lock), so there's no `set_*` method for it.
+    pub order_up_button: Button,
+    /// Nudge this note's manual arrange `order` later — swaps it with the
+    /// nearest higher-numbered note on the same surface. See `order_up_button`.
+    pub order_down_button: Button,
     /// Per-note "move to monitor" button: a plain `Button` with a manually-parented
     /// popover (`monitor_popover`) listing the available monitors. Hidden unless
     /// there is more than one; the Controller populates it via `set_monitor_menu`.
@@ -1980,6 +1988,19 @@ impl NoteChrome {
         let pin_button = Button::new();
         finish_header_button(&pin_button);
 
+        // Order nudge buttons: plain text glyphs, not `set_button_icon` — same
+        // reasoning as `minimize_button` (these icon names aren't in
+        // `use_symbolic_icons`'s whitelist).
+        let order_up_button = Button::new();
+        finish_header_button(&order_up_button);
+        order_up_button.set_label("↑");
+        order_up_button.set_tooltip_text(Some("Move earlier in Arrange order"));
+
+        let order_down_button = Button::new();
+        finish_header_button(&order_down_button);
+        order_down_button.set_label("↓");
+        order_down_button.set_tooltip_text(Some("Move later in Arrange order"));
+
         // Colour picker button (Button + manual swatch popover).
         let color_button = build_color_button(&note_view.borrow().handler_sink());
 
@@ -2042,6 +2063,8 @@ impl NoteChrome {
         controls.append(&lock_button);
         controls.append(&layer_button);
         controls.append(&pin_button);
+        controls.append(&order_up_button);
+        controls.append(&order_down_button);
         controls.append(&monitor_button);
         controls.append(&delete_button);
         controls.set_can_focus(false);
@@ -2129,6 +2152,8 @@ impl NoteChrome {
             minimize_button,
             copy_button,
             pin_button,
+            order_up_button,
+            order_down_button,
             monitor_button,
             monitor_popover,
             delete_button,

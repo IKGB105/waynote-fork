@@ -27,7 +27,7 @@ use crate::platform::store::{self, SaveOutcome};
 use crate::platform::surfaces::{SurfaceLayer, SurfaceManager};
 use crate::platform::watcher::{self, WatchGuard, WatchState};
 
-use super::arrange::{arrange_grid, next_flow_position};
+use super::arrange::{arrange_blocks, next_flow_position};
 use super::edit_session::{keyboard_modes, needs_temporary_front, KeyMode};
 use super::monitor_resolve::MonitorInfo;
 use super::note_entry::{NoteEntry, NoteId, SurfaceKey};
@@ -154,7 +154,46 @@ impl Controller {
         // Seed the shared "has notes" flag (the tray reads it; it starts after this).
         self.has_notes
             .store(!self.entries.is_empty(), std::sync::atomic::Ordering::Relaxed);
+        self.assign_missing_order();
         Ok(())
+    }
+
+    /// Give every entry that has no manual arrange `order` yet a number,
+    /// continuing after its surface's current max — sorted left-to-right (then
+    /// top-to-bottom, then id) by CURRENT position, so the leftmost note on
+    /// each surface becomes 1 (per-surface, not global: each monitor/layer
+    /// numbers independently, matching how `Controller::arrange` already
+    /// scopes itself to one surface at a time). Runs once at startup
+    /// (`load_notes`); notes that already have an order are left untouched.
+    fn assign_missing_order(&mut self) {
+        let mut missing_by_surface: HashMap<usize, Vec<(NoteId, i32, i32)>> = HashMap::new();
+        let mut max_by_surface: HashMap<usize, i32> = HashMap::new();
+        for id in self.entries.keys().cloned().collect::<Vec<_>>() {
+            let surf_idx = presenter::surface_index_for(self, &id);
+            let entry = &self.entries[&id];
+            match entry.note.order {
+                Some(o) => {
+                    let max = max_by_surface.entry(surf_idx).or_insert(0);
+                    *max = (*max).max(o);
+                }
+                None => missing_by_surface.entry(surf_idx).or_default().push((
+                    id,
+                    entry.geometry.x,
+                    entry.geometry.y,
+                )),
+            }
+        }
+        for (surf_idx, mut missing) in missing_by_surface {
+            missing.sort_by_key(|(id, x, y)| (*x, *y, id.clone()));
+            let mut next = max_by_surface.get(&surf_idx).copied().unwrap_or(0) + 1;
+            for (id, _, _) in missing {
+                if let Some(entry) = self.entries.get_mut(&id) {
+                    entry.note.order = Some(next);
+                    persist_entry(entry, now_ts());
+                }
+                next += 1;
+            }
+        }
     }
 
     /// Place every loaded note on its surface (startup). Scheduled on idle so the
@@ -690,6 +729,37 @@ fn wire_pin_button(
     });
 }
 
+/// Wire the per-note order-nudge buttons (▲/▼): click swaps this note's
+/// manual arrange `order` with its nearest lower/higher-numbered neighbor on
+/// the same surface. Same idle-tick deferral as every other state-mutating
+/// header button (uniform convention, not strictly needed here since nudging
+/// doesn't reposition/destroy the widget the button lives in).
+fn wire_order_buttons(
+    up_button: &gtk::Button,
+    down_button: &gtk::Button,
+    weak: std::rc::Weak<RefCell<Controller>>,
+    id: NoteId,
+) {
+    use gtk::prelude::ButtonExt;
+    {
+        let (weak, id) = (weak.clone(), id.clone());
+        up_button.connect_clicked(move |_| {
+            let (weak, id) = (weak.clone(), id.clone());
+            glib::idle_add_local_once(move || {
+                let Some(ctrl) = weak.upgrade() else { return };
+                Controller::nudge_order_earlier(&ctrl, &id);
+            });
+        });
+    }
+    down_button.connect_clicked(move |_| {
+        let (weak, id) = (weak.clone(), id.clone());
+        glib::idle_add_local_once(move || {
+            let Some(ctrl) = weak.upgrade() else { return };
+            Controller::nudge_order_later(&ctrl, &id);
+        });
+    });
+}
+
 /// Wire the per-note minimize button: click toggles between the note's normal
 /// size and its dock chip. Deferred to an idle tick like lock/pin — minimizing
 /// resizes/repositions the very widget the button lives in, and while that's
@@ -790,6 +860,7 @@ fn wire_header_buttons(
     wire_lock_button(&chrome.lock_button, weak.clone(), id.clone());
     wire_copy_button(&chrome.copy_button, weak.clone(), id.clone());
     wire_pin_button(&chrome.pin_button, weak.clone(), id.clone());
+    wire_order_buttons(&chrome.order_up_button, &chrome.order_down_button, weak.clone(), id.clone());
     wire_minimize_button(&chrome.minimize_button, weak.clone(), id.clone());
     wire_minimize_chip_click(&chrome.restore_click, weak.clone(), id.clone());
     wire_delete_button(&chrome.delete_button, weak.clone(), id.clone());
@@ -1312,8 +1383,7 @@ impl Controller {
     /// a different row, or to the left in the same row, is left exactly where it
     /// was — this is deliberately NOT a full re-arrange.
     fn close_gap_in_row(&mut self, surf_idx: usize, removed: &Geometry) {
-        const GAP: i32 = 16;
-        let shift = removed.w + GAP;
+        let shift = removed.w + FLOW_GAP;
 
         let mut to_shift: Vec<NoteId> = collect_surface_ids(self, surf_idx)
             .into_iter()
@@ -1408,7 +1478,7 @@ impl Controller {
                 let g = &self.entries[&other_id].geometry;
                 (g.w, g.h)
             };
-            let slot = next_flow_position(&existing_sizes, size, bounds, (24, 48), 16);
+            let slot = next_flow_position(&existing_sizes, size, bounds, FLOW_MARGIN, FLOW_GAP);
             if let Some(entry) = self.entries.get_mut(&other_id) {
                 entry.geometry.x = slot.x;
                 entry.geometry.y = slot.y;
@@ -1920,6 +1990,70 @@ impl Controller {
         this.borrow_mut().after_persist(id, outcome);
     }
 
+    /// Move note `id` earlier in its surface's manual arrange `order` — swaps
+    /// its number with the nearest lower-numbered neighbor. A no-op if `id`
+    /// has no order yet or is already first. Persisted immediately, but does
+    /// NOT reposition anything on screen: the new order only takes effect the
+    /// next time "Arrange" runs, same "save the number now, reflow later"
+    /// design as the rest of this feature.
+    pub fn nudge_order_earlier(this: &Rc<RefCell<Self>>, id: &NoteId) {
+        if defer_after_edit_commit(this, id, Self::apply_order_nudge_earlier) {
+            return;
+        }
+        Self::apply_order_nudge_earlier(this, id);
+    }
+
+    /// Move note `id` later in its surface's manual arrange `order` — the
+    /// mirror of `nudge_order_earlier`.
+    pub fn nudge_order_later(this: &Rc<RefCell<Self>>, id: &NoteId) {
+        if defer_after_edit_commit(this, id, Self::apply_order_nudge_later) {
+            return;
+        }
+        Self::apply_order_nudge_later(this, id);
+    }
+
+    fn apply_order_nudge_earlier(this: &Rc<RefCell<Self>>, id: &NoteId) {
+        Self::apply_order_nudge(this, id, OrderNudge::Earlier);
+    }
+
+    fn apply_order_nudge_later(this: &Rc<RefCell<Self>>, id: &NoteId) {
+        Self::apply_order_nudge(this, id, OrderNudge::Later);
+    }
+
+    fn apply_order_nudge(this: &Rc<RefCell<Self>>, id: &NoteId, nudge: OrderNudge) {
+        let swap = {
+            let c = this.borrow();
+            let Some(this_order) = c.entries.get(id).and_then(|e| e.note.order) else { return };
+            let surf_idx = presenter::surface_index_for(&c, id);
+            let siblings: Vec<(NoteId, i32)> = collect_surface_ids(&c, surf_idx)
+                .into_iter()
+                .filter(|nid| nid != id)
+                .filter_map(|nid| c.entries.get(&nid).and_then(|e| e.note.order).map(|o| (nid, o)))
+                .collect();
+            order_swap_target(this_order, &siblings, nudge).map(|(nid, o)| (nid, o, this_order))
+        };
+        let Some((neighbor_id, neighbor_order, this_order)) = swap else { return };
+
+        let (outcome_a, outcome_b) = {
+            let mut c = this.borrow_mut();
+            if let Some(e) = c.entries.get_mut(id) {
+                e.note.order = Some(neighbor_order);
+            }
+            if let Some(e) = c.entries.get_mut(&neighbor_id) {
+                e.note.order = Some(this_order);
+            }
+            let a = c.entries.get_mut(id).map(|e| persist_entry(e, now_ts()));
+            let b = c.entries.get_mut(&neighbor_id).map(|e| persist_entry(e, now_ts()));
+            (a, b)
+        };
+        if let Some(o) = outcome_a {
+            this.borrow_mut().after_persist(id, o);
+        }
+        if let Some(o) = outcome_b {
+            this.borrow_mut().after_persist(&neighbor_id, o);
+        }
+    }
+
     /// Toggle a note's content read-only `locked` flag and persist it. If the note
     /// is being edited when it becomes locked, commit that edit first (a locked
     /// note can't be in an edit session). Moving/resizing/recolour/pin/delete are
@@ -2279,7 +2413,14 @@ impl Controller {
     pub fn arrange(this: &Rc<RefCell<Self>>, surf_idx: usize) {
         let (ids, sizes, bounds, paths) = {
             let c = this.borrow();
-            let ids = collect_surface_ids(&c, surf_idx);
+            // Sorted by each note's assigned `order` (lowest first, ties by id)
+            // instead of `collect_surface_ids`'s plain id order — this is what
+            // makes "Arrange" follow the user's chosen priority instead of
+            // creation order. `assign_missing_order` (run at startup) means
+            // every note should already have one; `unwrap_or(i32::MAX)` just
+            // keeps this from panicking if that's somehow not true yet.
+            let mut ids = collect_surface_ids(&c, surf_idx);
+            ids.sort_by_key(|id| (c.entries[id].note.order.unwrap_or(i32::MAX), id.clone()));
             // Each note keeps its own current size — arrange only repositions,
             // it never resizes (a note the user sized on purpose shouldn't
             // snap back to the default size just from tidying up).
@@ -2295,7 +2436,7 @@ impl Controller {
             (ids, sizes, bounds, paths)
         };
 
-        let placements = arrange_grid(&ids, &sizes, bounds, (24, 48), 16);
+        let placements = arrange_blocks(&ids, &sizes, bounds, FLOW_MARGIN, FLOW_GAP);
 
         {
             let mut c = this.borrow_mut();
@@ -2319,6 +2460,36 @@ impl Controller {
         }
 
         presenter::sync_surface(&mut this.borrow_mut(), surf_idx);
+    }
+}
+
+/// Direction for `Controller::nudge_order_earlier`/`nudge_order_later`.
+#[derive(Clone, Copy)]
+enum OrderNudge {
+    Earlier,
+    Later,
+}
+
+/// PURE: which of `siblings` (id, order) to swap `order` values with when
+/// nudging a note currently at `this_order` — the CLOSEST neighbor on the
+/// requested side (highest below for `Earlier`, lowest above for `Later`), or
+/// `None` if `this_order` is already at that end (nothing to swap with).
+fn order_swap_target(
+    this_order: i32,
+    siblings: &[(NoteId, i32)],
+    nudge: OrderNudge,
+) -> Option<(NoteId, i32)> {
+    match nudge {
+        OrderNudge::Earlier => siblings
+            .iter()
+            .filter(|(_, o)| *o < this_order)
+            .max_by_key(|(_, o)| *o)
+            .cloned(),
+        OrderNudge::Later => siblings
+            .iter()
+            .filter(|(_, o)| *o > this_order)
+            .min_by_key(|(_, o)| *o)
+            .cloned(),
     }
 }
 
@@ -2379,12 +2550,22 @@ fn minimized_ids_on_surface(ctrl: &Controller, surf_idx: usize) -> Vec<NoteId> {
     ids
 }
 
+/// (left, top) margin from a surface's edges for auto-placed notes — arrange,
+/// a new note's flow slot, and a restored note's overlap-displacement target
+/// all share this so notes never land flush against the screen edge.
+const FLOW_MARGIN: (i32, i32) = (32, 48);
+/// Gap between auto-placed notes (both axes) — same sharing rationale as
+/// `FLOW_MARGIN`. Also what `close_gap_in_row` shifts a row's notes by when
+/// closing the gap a minimized note left behind, so the closed-up spacing
+/// matches what arrange/flow-placement would have produced.
+const FLOW_GAP: i32 = 24;
+
 /// Square size of a minimized note's dock chip, in surface-local pixels.
 const DOCK_CHIP_SIZE: i32 = 48;
 /// Inset of the dock strip from the surface's left/bottom edges.
-const DOCK_MARGIN: i32 = 12;
+const DOCK_MARGIN: i32 = 20;
 /// Gap between adjacent dock chips.
-const DOCK_GAP: i32 = 8;
+const DOCK_GAP: i32 = 12;
 
 /// Top-left rect of the `index`-th (0-based) chip slot in the bottom-left
 /// minimized-note dock strip for a surface with these `bounds`. Chips pack
@@ -2446,6 +2627,11 @@ pub fn new_note(id: String, default_color: &str, default_layer: &Layer) -> crate
         pinned: false,
         locked: false,
         layer: default_layer.clone(),
+        // A brand-new note has no manual priority yet — it sorts last on
+        // "Arrange" (see `Controller::arrange`'s `unwrap_or(i32::MAX)`) until
+        // either the user nudges it with ▲/▼ or the next restart's
+        // `assign_missing_order` backfills one.
+        order: None,
         tags: Vec::new(),
         extra: std::collections::BTreeMap::new(),
         // "# " (not empty): there's no separate title widget any more — the
@@ -2548,8 +2734,8 @@ impl Controller {
                 &existing_sizes,
                 (default_size[0], default_size[1]),
                 bounds,
-                (24, 48),
-                16,
+                FLOW_MARGIN,
+                FLOW_GAP,
             );
 
             (id, note, path, monitor_idx, rect)
@@ -2782,6 +2968,32 @@ mod tests {
     use crate::platform::surfaces::SurfaceLayer;
 
     #[test]
+    fn order_swap_target_earlier_picks_the_closest_lower_neighbor() {
+        let siblings = vec![("a".to_string(), 1), ("b".to_string(), 3), ("c".to_string(), 7)];
+        // Currently at 5: the closest neighbor below is 3 ("b"), not 1 ("a").
+        assert_eq!(
+            order_swap_target(5, &siblings, OrderNudge::Earlier),
+            Some(("b".to_string(), 3))
+        );
+    }
+
+    #[test]
+    fn order_swap_target_later_picks_the_closest_higher_neighbor() {
+        let siblings = vec![("a".to_string(), 1), ("b".to_string(), 3), ("c".to_string(), 7)];
+        assert_eq!(
+            order_swap_target(5, &siblings, OrderNudge::Later),
+            Some(("c".to_string(), 7))
+        );
+    }
+
+    #[test]
+    fn order_swap_target_none_at_either_end() {
+        let siblings = vec![("a".to_string(), 1), ("b".to_string(), 3)];
+        assert_eq!(order_swap_target(1, &siblings, OrderNudge::Earlier), None, "already first");
+        assert_eq!(order_swap_target(3, &siblings, OrderNudge::Later), None, "already last");
+    }
+
+    #[test]
     fn initial_rect_uses_saved_geometry_when_present() {
         let g = Geometry {
             output: "DP-1".into(),
@@ -2829,6 +3041,7 @@ mod tests {
             pinned: true,
             locked: false,
             layer: Layer::Desktop,
+            order: None,
             tags: vec!["t".into()],
             extra: std::collections::BTreeMap::new(),
             body: "# Old\n".into(),
@@ -2848,6 +3061,7 @@ mod tests {
             pinned: false,
             locked: false,
             layer: Layer::Front,
+            order: None,
             tags: vec![],
             extra: std::collections::BTreeMap::new(),
             body: "# Old\n".into(),

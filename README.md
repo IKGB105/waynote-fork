@@ -211,6 +211,14 @@ for my own daily-driver use:
   notes out left-to-right (wrapping top-to-bottom) instead of top-to-bottom,
   and only repositions notes — it no longer resets every note back to the
   default size on every call.
+- **Manual arrange order.** Every note has a priority number — auto-assigned
+  left-to-right the first time this ran (leftmost = 1), nudged from then on
+  with the ▲/▼ header buttons (swaps with the nearest lower/higher-numbered
+  note on the same monitor+layer). "Arrange" fills fixed 2×2 blocks — top-left,
+  top-right, bottom-left, bottom-right, in order, before starting the next
+  block to the right — instead of one continuous width-driven row. Nudging
+  just saves the new number; the layout itself only changes on the next
+  "Arrange".
 - **Global font-scale setting**, adjustable live from the tray menu
   ("Font size +" / "Font size −", 0.5×–3×) and persisted across restarts.
 - **Minimize to a dock chip.** Shrink a note to a small coloured square parked
@@ -219,6 +227,9 @@ for my own daily-driver use:
   saved position (hovering shows the note's title first, so you know what
   you're opening). Survives a restart — a minimized note comes back as a chip,
   not full-size.
+- **Wider spacing.** Auto-placed notes (new notes, Arrange, restore, the dock
+  strip) now keep a visible 24-32px gap from each other and the screen edges,
+  instead of sitting flush against them.
 - **Optional header controls.** `show_lock_button`, `show_pin_button`, and
   `show_mode_indicator` (the "● view" / "✓ save" pill) in `config.toml` — hand-
   edit only, like `font_scale` — hide controls you don't use without removing
