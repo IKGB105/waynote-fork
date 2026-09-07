@@ -2091,18 +2091,25 @@ impl Controller {
     /// through `defer_after_edit_commit`/`persist_entry`; it follows
     /// `commit_move`/`commit_resize`'s plain geometry-mutation shape instead.
     pub fn toggle_minimize(this: &Rc<RefCell<Self>>, id: &NoteId) {
-        let is_minimized = this
-            .borrow()
-            .entries
-            .get(id)
-            .map(|e| e.pre_minimize_geometry.is_some())
-            .unwrap_or(false);
-        let mut c = this.borrow_mut();
-        if is_minimized {
-            c.restore_minimized_note(id);
-        } else {
-            c.minimize_note(id);
+        let (is_minimized, surf_idx) = {
+            let c = this.borrow();
+            let is_minimized = c.entries.get(id).map(|e| e.pre_minimize_geometry.is_some()).unwrap_or(false);
+            (is_minimized, presenter::surface_index_for(&c, id))
+        };
+        {
+            let mut c = this.borrow_mut();
+            if is_minimized {
+                c.restore_minimized_note(id);
+            } else {
+                c.minimize_note(id);
+            }
         }
+        // Auto-arrange the surface every time a note minimizes or restores —
+        // both directions leave the remaining visible notes in whatever spot
+        // `close_gap_in_row`/`displace_overlapping` computed; snapping straight
+        // to the canonical order-based grid is simpler and is what the user
+        // asked for over the old "approximate" intermediate positions.
+        Self::arrange(this, surf_idx);
     }
 
     /// Restore note `id` if (and only if) it's currently minimized; a no-op
@@ -2111,15 +2118,18 @@ impl Controller {
     /// check here, not the wiring, is what keeps a click on a normal-sized
     /// note's body/buttons from ever minimizing or restoring anything.
     pub fn restore_if_minimized(this: &Rc<RefCell<Self>>, id: &NoteId) {
-        let is_minimized = this
-            .borrow()
-            .entries
-            .get(id)
-            .map(|e| e.pre_minimize_geometry.is_some())
-            .unwrap_or(false);
-        if is_minimized {
-            this.borrow_mut().restore_minimized_note(id);
+        let (is_minimized, surf_idx) = {
+            let c = this.borrow();
+            let is_minimized = c.entries.get(id).map(|e| e.pre_minimize_geometry.is_some()).unwrap_or(false);
+            (is_minimized, presenter::surface_index_for(&c, id))
+        };
+        if !is_minimized {
+            return;
         }
+        this.borrow_mut().restore_minimized_note(id);
+        // See `toggle_minimize`'s comment: auto-arrange the surface right
+        // after a restore, same as on minimize.
+        Self::arrange(this, surf_idx);
     }
 
     /// Set `note.color` for `id`, persist the `.md`, and recolor the chrome.
@@ -2562,7 +2572,7 @@ const FLOW_MARGIN: (i32, i32) = (32, 48);
 /// `FLOW_MARGIN`. Also what `close_gap_in_row` shifts a row's notes by when
 /// closing the gap a minimized note left behind, so the closed-up spacing
 /// matches what arrange/flow-placement would have produced.
-const FLOW_GAP: i32 = 24;
+const FLOW_GAP: i32 = 16;
 
 /// Square size of a minimized note's dock chip, in surface-local pixels.
 const DOCK_CHIP_SIZE: i32 = 48;
