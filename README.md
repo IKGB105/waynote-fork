@@ -16,10 +16,11 @@
   <img src="docs/fork-hero.png" alt="This fork's notes on a Wayland desktop — no title bar, controls in the note's own mode row, ten paper colours, and the fit-to-content button" width="100%">
 </p>
 
-Waynote keeps quick, glanceable notes on the desktop layer of your tiling
-compositor. Notes are plain `.md` files — hackable, version-controllable, and
-friendly to Obsidian and AI agents: edit a note from any editor and it refreshes
-live on screen.
+Waynote keeps quick, glanceable notes on the desktop layer of your Wayland
+compositor (`wlr-layer-shell`), instead of a floating window. Notes are plain
+`.md` files — hackable, version-controllable, and friendly to Obsidian and AI
+agents: edit a note from any editor and it refreshes live on screen, with
+conflict copies instead of silent overwrites.
 
 > [!IMPORTANT]
 > **This is [IKGB105](https://github.com/IKGB105)'s personal fork** of
@@ -34,27 +35,6 @@ live on screen.
 > **Young, but functional.** The full feature set works; the interactive paths
 > (drag/resize, click-to-edit, checkboxes, image paste, tray) have had limited
 > real-world testing, so expect the occasional rough edge.
-
-## Why Waynote
-
-Existing sticky-note apps target X11 desktop environments, hide your notes in a
-private database, and don't speak markdown. Waynote is built for Wayland power
-users instead:
-
-- **Lives on the desktop layer** via `wlr-layer-shell` — send notes behind your
-  windows or bring them to the front, show/hide all, recolour them, lock one
-  read-only, move it to another monitor, and pin the ones that stay.
-- **Plain markdown files.** Each note is a `.md` file with a small YAML
-  frontmatter (id, color, pinned, locked, tags). Render is faithful — six
-  distinct heading levels, bold/italic/strikethrough, inline code and code
-  blocks, blockquotes, nested and ordered lists, links, task checkboxes (struck
-  through when done), and inline images — across ten paper colours, with
-  `Ctrl+B`/`Ctrl+I`/`Ctrl+K` shortcuts while editing.
-- **Agent- and sync-friendly.** External edits (your editor, a script, an AI
-  agent, Syncthing) are reconciled live, with conflict copies instead of silent
-  overwrites. Content stays clean for git: volatile geometry is stored
-  separately from the notes.
-- **A single Rust binary**, hackable and easy to install.
 
 ## Compatibility
 
@@ -155,38 +135,6 @@ Any other action — `arrange`, or per-note ones like `set-color`, `toggle-lock`
 ```sh
 gapplication action dev.mryll.waynote arrange
 ```
-
-## How it works
-
-Waynote opens one layer-shell surface per **(monitor × layer)** —
-`front = Layer::Top`, `desktop = Layer::Background` — each hosting a stationary
-canvas. The Wayland input region is limited to the note rectangles, so the rest
-of the surface stays click-through. Notes are data models: moving a note across
-monitors or layers recreates its view in the target surface rather than
-reparenting widgets, which avoids ghost frames.
-
-```
-src/
-  main.rs              # app entry point + CLI routing
-  app/
-    controller.rs      # central state: notes, watcher, tray, actions
-    presenter.rs       # places note cards onto surfaces
-    tray.rs            # SNI tray item (ksni)
-  core/
-    markdown.rs        # pulldown-cmark → IR
-    note.rs            # note domain model
-    reconcile.rs       # diff-and-reconcile for file-watcher changes
-  platform/
-    render.rs          # GTK TextBuffer renderer (markdown IR → widgets)
-    watcher.rs         # inotify file watcher + debounce
-    paths.rs           # XDG path resolution
-    doctor.rs          # diagnostics
-    surfaces.rs        # layer-shell surfaces
-```
-
-The design follows Vertical Slice Architecture — user actions are slices, while
-filesystem, surfaces, tray, and markdown render are shared platform modules —
-keeping domain logic unit-testable without a display.
 
 ## What's different in this fork
 
