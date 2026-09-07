@@ -2572,7 +2572,7 @@ const FLOW_MARGIN: (i32, i32) = (32, 48);
 /// `FLOW_MARGIN`. Also what `close_gap_in_row` shifts a row's notes by when
 /// closing the gap a minimized note left behind, so the closed-up spacing
 /// matches what arrange/flow-placement would have produced.
-const FLOW_GAP: i32 = 16;
+const FLOW_GAP: i32 = 12;
 
 /// Square size of a minimized note's dock chip, in surface-local pixels.
 const DOCK_CHIP_SIZE: i32 = 48;
