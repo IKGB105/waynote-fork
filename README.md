@@ -215,9 +215,8 @@ for my own daily-driver use:
   cascade. Each note carries a priority number driving that order,
   auto-assigned left-to-right the first time this ran (leftmost = 1); nudge it
   from then on with the ▲/▼ header buttons (swaps with the nearest
-  lower/higher-numbered note on the same monitor+layer — the number shown
-  between the buttons updates instantly, but the layout itself only reflows
-  on the next "Arrange").
+  lower/higher-numbered note on the same monitor+layer and immediately re-runs
+  "Arrange" on that surface, same as minimizing/restoring a note does).
 - **Global font-scale setting**, adjustable live from the tray menu
   ("Font size +" / "Font size −", 0.5×–3×) and persisted across restarts.
 - **Minimize to a dock chip.** Shrink a note to a small coloured square parked

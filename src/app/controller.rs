@@ -1993,11 +1993,10 @@ impl Controller {
     }
 
     /// Move note `id` earlier in its surface's manual arrange `order` — swaps
-    /// its number with the nearest lower-numbered neighbor. A no-op if `id`
-    /// has no order yet or is already first. Persisted immediately, but does
-    /// NOT reposition anything on screen: the new order only takes effect the
-    /// next time "Arrange" runs, same "save the number now, reflow later"
-    /// design as the rest of this feature.
+    /// its number with the nearest lower-numbered neighbor, persists both, and
+    /// immediately re-runs "Arrange" on that surface so the swap is visible
+    /// right away (same as minimize/restore). A no-op if `id` has no order yet
+    /// or is already first.
     pub fn nudge_order_earlier(this: &Rc<RefCell<Self>>, id: &NoteId) {
         if defer_after_edit_commit(this, id, Self::apply_order_nudge_earlier) {
             return;
@@ -2032,9 +2031,9 @@ impl Controller {
                 .filter(|nid| nid != id)
                 .filter_map(|nid| c.entries.get(&nid).and_then(|e| e.note.order).map(|o| (nid, o)))
                 .collect();
-            order_swap_target(this_order, &siblings, nudge).map(|(nid, o)| (nid, o, this_order))
+            order_swap_target(this_order, &siblings, nudge).map(|(nid, o)| (nid, o, this_order, surf_idx))
         };
-        let Some((neighbor_id, neighbor_order, this_order)) = swap else { return };
+        let Some((neighbor_id, neighbor_order, this_order, surf_idx)) = swap else { return };
 
         let (outcome_a, outcome_b) = {
             let mut c = this.borrow_mut();
@@ -2056,6 +2055,10 @@ impl Controller {
         if let Some(o) = outcome_b {
             this.borrow_mut().after_persist(&neighbor_id, o);
         }
+        // Per the user: a nudge should reflow the surface immediately, same
+        // as minimize/restore — not just save the number for the next manual
+        // Arrange.
+        Self::arrange(this, surf_idx);
     }
 
     /// Toggle a note's content read-only `locked` flag and persist it. If the note
