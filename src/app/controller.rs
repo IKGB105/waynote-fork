@@ -2710,8 +2710,13 @@ impl Controller {
             let default_layer = parse_layer_str(&c.config.default_layer);
             // A varied colour per note (derived from its id, not a fixed
             // config default) reads better once you have more than a
-            // couple - see theme::random_color.
-            let color = crate::core::theme::random_color(&id);
+            // couple - see theme::random_unused_color. Prefers a colour no
+            // OTHER note (any monitor/layer, minimized or not) is currently
+            // using, app-wide, so two notes rarely start out looking
+            // identical; falls back to plain random once the 10-colour
+            // palette is exhausted.
+            let used_colors: Vec<&str> = c.entries.values().map(|e| e.note.color.as_str()).collect();
+            let color = crate::core::theme::random_unused_color(&id, &used_colors);
             let mut note = new_note(id.clone(), color, &default_layer);
             let cursor = cursor_monitor_index(&c.monitors);
             let monitor_idx = active_monitor(

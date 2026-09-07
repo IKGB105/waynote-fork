@@ -71,6 +71,22 @@ pub fn random_color(id: &str) -> &'static str {
     NOTE_COLORS[(sum as usize) % NOTE_COLORS.len()]
 }
 
+/// PURE: pick a palette colour for a new note, preferring one NOT already in
+/// `used` (every other note's current colour, app-wide) — so a new note
+/// rarely starts out looking identical to an existing one while the palette
+/// still has room. Falls back to plain `random_color(id)` (any colour, ties
+/// allowed) once every colour is taken, which is unavoidable past 10 notes.
+/// Same id-sum trick as `random_color`, just restricted to the unused subset.
+pub fn random_unused_color(id: &str, used: &[&str]) -> &'static str {
+    let unused: Vec<&'static str> =
+        NOTE_COLORS.iter().copied().filter(|c| !used.contains(c)).collect();
+    if unused.is_empty() {
+        return random_color(id);
+    }
+    let sum: u32 = id.bytes().map(u32::from).sum();
+    unused[(sum as usize) % unused.len()]
+}
+
 /// Return the colour tokens for `color`. Unknown names fall back to yellow.
 pub fn theme(color: &str) -> Theme {
     match color {
@@ -121,6 +137,28 @@ mod tests {
         let colors: std::collections::HashSet<_> =
             (0..20u32).map(|i| random_color(&format!("01KZQXSG7T6XZR9VTVDTXGP{i:02}"))).collect();
         assert!(colors.len() > 1, "20 different ids all produced the same colour");
+    }
+
+    #[test]
+    fn random_unused_color_avoids_every_used_colour_while_room_remains() {
+        let used = ["yellow", "green", "blue", "pink", "purple", "gray", "orange", "red", "teal"];
+        // Only "brown" is left unused - must return it regardless of id.
+        for id in ["01A", "01KZQXSG7T6XZR9VTVDTXGP2KY", "z"] {
+            assert_eq!(random_unused_color(id, &used), "brown");
+        }
+    }
+
+    #[test]
+    fn random_unused_color_falls_back_to_random_color_once_all_ten_are_used() {
+        let used = ALL_COLORS;
+        for id in ["01A", "01KZQXSG7T6XZR9VTVDTXGP2KY", "z"] {
+            assert_eq!(random_unused_color(id, &used), random_color(id));
+        }
+    }
+
+    #[test]
+    fn random_unused_color_with_none_used_is_a_valid_palette_colour() {
+        assert!(is_note_color(random_unused_color("01A", &[])));
     }
 
     const ALL_COLORS: [&str; 10] =
